@@ -115,7 +115,7 @@ export async function execute(cmd, ctx) {
     }
 
     case 'mute': {
-      const target = (ctx.at ?? []).find((x) => String(x) !== String(process.env.SELF_QQ ?? '340876685'));
+      const target = (ctx.at ?? []).find((x) => String(x) !== String(process.env.SELF_QQ ?? ''));
       if (!target) return { handled: true, reply: '要禁言谁呀，@ 一下' };
       const sec = Math.min(cmd.seconds ?? 60, MUTE_MAX_SEC);
       const r = await mute(callApi, { gid, uin: target, seconds: sec, reason: `主人指令 by ${ctx.uin}` });

@@ -68,7 +68,7 @@ for (let i = 0; i < N; i += 1) {
   const atMe = /@小鲸鱼/.test(text);
   const clean = text.replace(/@小鲸鱼\s*/, '');
   const message = atMe
-    ? [{ type: 'at', data: { qq: '340876685' } }, { type: 'text', data: { text: ' ' + clean } }]
+    ? [{ type: 'at', data: { qq: '10001000' } }, { type: 'text', data: { text: ' ' + clean } }]
     : [{ type: 'text', data: { text } }];
 
   const evt = {

@@ -153,8 +153,8 @@ export function apply(ctx, config = {}) {
   tool({
     name: 'qq_allowlist',
     description: '读/改白名单：私聊谁可以回（allowlist）和群策略（group-allowlist）。'
-      + '例：{"self":"123456","friends":{"1807430990":{"label":"主人","enabled":true}}}、'
-      + '{"groups":{"783599631":{"label":"主群","dryRun":false}}}、{"defaults":{"replyProb":0.02}}',
+      + '例：{"self":"123456","friends":{"20002000":{"label":"主人","enabled":true}}}、'
+      + '{"groups":{"123456789":{"label":"主群","dryRun":false}}}、{"defaults":{"replyProb":0.02}}',
     parameters: {
       type: 'object',
       properties: {

@@ -29,7 +29,7 @@ import { shortPersona, ANCHOR } from './persona.mjs';
 const DIR = fileURLToPath(new URL('.', import.meta.url));
 const CFG_FILE = process.env.GROUP_CFG || (DIR + '../group-allowlist.json');
 
-export const SELF = String(process.env.SELF_QQ ?? '340876685');
+export const SELF = String(process.env.SELF_QQ ?? '');
 
 /** 读配置（每次现读，改完即时生效，不用重启） */
 export function loadConfig() {

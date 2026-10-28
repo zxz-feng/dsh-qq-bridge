@@ -43,11 +43,11 @@ dsh plugin --profile web add link:/绝对/路径/dsh-qq-bridge
 
 ```text
 1) 我是谁 + 谁能找我（私聊白名单）
-   qq_allowlist { "allow": { "self": "340876685",
-                             "friends": { "1807430990": { "label": "主人", "enabled": true } } } }
+   qq_allowlist { "allow": { "self": "10001000",
+                             "friends": { "20002000": { "label": "主人", "enabled": true } } } }
 
 2) 群（不加就是全忽略）
-   qq_allowlist { "group": { "groups": { "783599631": { "label": "主群", "dryRun": false } } } }
+   qq_allowlist { "group": { "groups": { "123456789": { "label": "主群", "dryRun": false } } } }
    # dryRun: true = 只生成不发送（建议先这么跑一天看看它想说什么）
 
 3) 验一下

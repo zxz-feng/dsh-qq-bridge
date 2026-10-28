@@ -40,7 +40,7 @@ wss.on('connection', (ws) => {
       message_id: 888001,
       raw_message: '@小鲸鱼 在吗',
       message: [
-        { type: 'at', data: { qq: '340876685' } },
+        { type: 'at', data: { qq: '10001000' } },
         { type: 'text', data: { text: ' 在吗' } },
       ],
       sender: { user_id: UIN, nickname: '测试员', card: '测试员' },
