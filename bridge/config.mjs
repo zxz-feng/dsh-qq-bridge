@@ -58,6 +58,8 @@ export const EMPTY_GROUP_CFG = {
     cooldownSec: 60,
     memberCooldownMin: 5,
     hardCooldownSec: 3,
+    spamThreshold: 8,     // 60 秒内多少条算刷屏
+    spamSeconds: 600,     // 判定刷屏后静默多久（对骂场景可调小）
     admin: { mute: true, muteMaxSec: 300, kick: false, recallSelf: true },
     ownerUins: [],
     ignoreUins: [],

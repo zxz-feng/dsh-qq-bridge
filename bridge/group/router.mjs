@@ -131,10 +131,22 @@ export async function handleGroupMessage(evt, { callApi }) {
   const replyToMe = replyMatch ? store.isMyMessage(gid, replyMatch[1]) : false;
   const hasImage = (parsed.images?.length ?? 0) > 0;
 
-  // 刷屏判定（主人豁免）
-  const spam = commands.isOwner(uin, policy) ? { spam: false } : members.checkSpam(uin);
+  // ── 刷屏判定（主人豁免；阈值/静默时长可在群策略里调）──
+  // ⚠️ 2026-10-29 线上真实故障：对骂时对方 8 条/分钟就被判刷屏、锁 10 分钟，
+  //    之后**连 @ 都不回** —— 使用者看到的是「被骂了几句突然不理人」。
+  //    现在：① 硬触发（@/回复/叫名字）不受刷屏静默影响；
+  //         ② 阈值和时长交给群策略（spamThreshold / spamSeconds），对骂场景自己放宽。
+  const hardTrigger = atMe || replyToMe
+    || (policy.selfNick ?? []).some((n) => n && text.includes(n));
+  const spam = commands.isOwner(uin, policy)
+    ? { spam: false }
+    : members.checkSpam(uin, {
+      threshold: Number(policy.spamThreshold ?? 8),
+      seconds: Number(policy.spamSeconds ?? 600),
+    });
   if (spam.spam) {
-    console.log(`  [group] ${name} 在刷屏，静默到 ${new Date(spam.until * 1000).toLocaleTimeString('zh-CN')}`);
+    console.log(`  [group] ${name} 在刷屏，静默到 ${new Date(spam.until * 1000).toLocaleTimeString('zh-CN')}`
+      + (hardTrigger ? '（但他点了名 → 照回）' : ''));
   }
 
   // 表情包：先查库，没命中才调视觉
@@ -224,7 +236,7 @@ export async function handleGroupMessage(evt, { callApi }) {
     gapSec,
     policy,
     stats: store.loadStats(gid),
-    member,
+    member: hardTrigger ? { ...member, spamUntil: 0 } : member,
     lastSpoke: store.lastSpokeAt(gid),
     hotwords: hw,
     hasImage,

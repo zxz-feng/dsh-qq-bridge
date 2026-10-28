@@ -90,15 +90,23 @@ export function addAffinity(uin, delta, reason = '') {
 }
 
 /** 刷屏判定：60 秒内超过 8 条 → 静默 10 分钟，关系值 -3 */
-export function checkSpam(uin) {
+/**
+ * 刷屏判定
+ * @param {object} o
+ * @param {number} o.threshold 60 秒内多少条算刷屏（默认 8）
+ * @param {number} o.seconds   静默多久（默认 600）
+ * ⚠️ 参数化的原因：孙吧模式下对骂本来就是高频，用 8 条/10 分钟那套会被对方几句话
+ *    直接锁死，表现成"被骂了几句突然不理人"（2026-10-29 实际发生）。
+ */
+export function checkSpam(uin, { threshold = 8, seconds = 600 } = {}) {
   const p = load(uin);
   const t = nowSec();
   if (p.spamUntil > t) return { spam: true, until: p.spamUntil };
   // 用 msgCount 的近似：记录最近消息时间戳
   p.recent = [...(p.recent ?? []).filter((x) => t - x < 60), t];
-  if (p.recent.length >= 8) {
+  if (p.recent.length >= threshold) {
     p.recent = [];
-    p.spamUntil = t + 600;
+    p.spamUntil = t + seconds;
     addAffinityRaw(p, -3);
     save(p);
     return { spam: true, until: p.spamUntil };

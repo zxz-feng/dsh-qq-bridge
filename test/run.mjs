@@ -93,6 +93,15 @@ console.log('\n【决策器（零 token）】')
   const cold = decide({ text: '哈哈哈哈', policy, now: noon, gapSec: 3600 })
   ok('冷场时更可能插一句（分数更高）', cold.score > plain.score, `${plain.score} → ${cold.score}`)
 
+  // 刷屏静默 vs 硬触发（2026-10-29 线上故障的回归测试）
+  const locked = { spamUntil: noon + 600, affinity: 0 }
+  const quiet1 = decide({ text: '随便说句', policy, now: noon, member: locked })
+  ok('刷屏静默中：普通消息不理', quiet1.speak === false, JSON.stringify(quiet1))
+  const quiet2 = decide({ text: '@小鲸鱼 菜', atMe: true, policy, now: noon, member: locked })
+  ok('decide 本身会拦（所以 router 必须给硬触发清零）', quiet2.speak === false)
+  const shout = decide({ text: '@小鲸鱼 菜', atMe: true, policy, now: noon, member: { ...locked, spamUntil: 0 } })
+  ok('清零后被 @ 必须回', shout.speak === true, JSON.stringify(shout))
+
   ok('跨零点静默 [23,7] 认 1 点', inQuietHours(1, [23, 7]) === true)
   ok('跨零点静默 [23,7] 认 12 点', inQuietHours(12, [23, 7]) === false)
   ok('普通区间 [2,9] 认 5 点', inQuietHours(5, [2, 9]) === true)
