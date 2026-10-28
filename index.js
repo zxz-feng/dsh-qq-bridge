@@ -275,6 +275,45 @@ export function apply(ctx, config = {}) {
   })
 
   tool({
+    name: 'qq_style',
+    description: '看/切某个群的说话风格档。不传 style 就是查。'
+      + 'style: "sunbar" = 孙吧模式（损、毒、短、反问收尾，决策更爱接话）；"normal" = 正常。'
+      + 'intensity: "mid" | "heavy"（heavy 更冲、概率更高）。改完即时生效，不用重启。',
+    parameters: {
+      type: 'object',
+      properties: {
+        gid: { type: 'string', description: '群号' },
+        style: { type: 'string', description: 'sunbar | normal（不传=只查）' },
+        intensity: { type: 'string', description: 'mid | heavy，默认 mid' },
+      },
+      required: ['gid'],
+      additionalProperties: false,
+    },
+    async execute({ gid, style, intensity = 'mid' }) {
+      const { readFileSync, writeFileSync, mkdirSync } = await import('node:fs')
+      const dir = join(home, 'store', 'groups', String(gid))
+      const file = join(dir, 'style.json')
+      const read = () => {
+        try { return JSON.parse(readFileSync(file, 'utf8')) }
+        catch { return { style: 'normal', intensity: 'mid', by: '', since: 0 } }
+      }
+      if (!style) {
+        const cur = read()
+        return { ok: true, gid, style: cur.style ?? 'normal', intensity: cur.intensity ?? 'mid', by: cur.by, since: cur.since }
+      }
+      const next = {
+        style: style === 'sunbar' ? 'sunbar' : 'normal',
+        intensity: intensity === 'heavy' ? 'heavy' : 'mid',
+        by: 'dsh',
+        since: Date.now(),
+      }
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(file, JSON.stringify(next, null, 2))
+      return { ok: true, gid, ...next }
+    },
+  })
+
+  tool({
     name: 'qq_restart',
     description: '优雅重启 QQ 桥子进程。',
     parameters: { type: 'object', properties: {}, additionalProperties: false },

@@ -25,6 +25,8 @@ process.env.PERSONA_DIR = join(HOME, 'persona')
 const { normalize, DEFAULTS, envFor, seedFiles, loadAllowlist, saveAllowlist, loadGroupCfg, saveGroupCfg } = await import('../bridge/config.mjs')
 const { decide, inQuietHours } = await import('../bridge/group/decide.mjs')
 const { parseCQ } = await import('../bridge/cq-parser.mjs')
+const { parseCommand, parseLookup, cleanLookupArg } = await import('../bridge/group/commands.mjs')
+const { getStyle, setStyle, styleBlock, styleBias, styleShortPersona } = await import('../bridge/group/style.mjs')
 const { toFileUrl, toContainerPath, HOST_MEDIA, CQ_MEDIA } = await import('../bridge/group/paths.mjs')
 const { fullPersona, shortPersona, personaVersion, personaDir } = await import('../bridge/persona-core.mjs')
 const groupPersona = await import('../bridge/group/persona.mjs')
@@ -106,6 +108,56 @@ console.log('\n【决策器（零 token）】')
   ok('跨零点静默 [23,7] 认 12 点', inQuietHours(12, [23, 7]) === false)
   ok('普通区间 [2,9] 认 5 点', inQuietHours(5, [2, 9]) === true)
   ok('start==end 视为不静默', inQuietHours(5, [5, 5]) === false)
+}
+
+// ── 2.5 命令：孙吧开关 / 找资源 ─────────────────────────
+console.log('\n【命令解析】')
+{
+  eq('开孙吧模式', parseCommand('开孙吧模式')?.kind, 'sunbar_on')
+  eq('开个孙吧（带量词也要认）', parseCommand('开个孙吧')?.kind, 'sunbar_on')
+  eq('关掉孙吧（不能认成开）', parseCommand('关掉孙吧')?.kind, 'sunbar_off')
+  eq('孙吧 → 查状态', parseCommand('孙吧')?.kind, 'sunbar_status')
+  eq('放首晴天 → 点歌', parseCommand('放首晴天')?.kind, 'sing')
+
+  // 找资源：谁都能用，但必须真的是在找东西
+  ok('帮X找个黄油 → 认', parseLookup('肥鱼大小姐，帮lcarus找个黄油来，要缩略图') !== null)
+  eq('关键词被洗成"黄油"', cleanLookupArg(parseLookup('给lcarus找个黄油来，要缩略图')?.arg), '黄油')
+  eq('量词被剥掉（张壁纸→壁纸）', cleanLookupArg('张壁纸'), '壁纸')
+  eq('附加要求被剥掉', cleanLookupArg('本子 要封面'), '本子')
+  ok('推荐个黄油 → 认', parseLookup('推荐个黄油') !== null)
+  ok('找个galgame → 认', parseLookup('找个galgame') !== null)
+  ok('闲聊不误伤（这游戏真好玩）', parseLookup('这游戏真好玩') === null)
+  ok('日常请求不误伤（帮我找个借口）', parseLookup('帮我找个借口') === null)
+  ok('没有资源词不认（找个对象）', parseLookup('找个对象') === null)
+}
+
+// ── 2.6 风格档（孙吧模式）───────────────────────────────
+console.log('\n【风格档】')
+{
+  const GID = '999001'
+  eq('默认是正常', getStyle(GID).style, 'normal')
+  eq('正常档不注入任何东西', styleBlock(GID), '')
+  eq('正常档不做偏置', styleBias(GID).replyProbMul, 1)
+
+  setStyle(GID, 'sunbar', { by: 'test', intensity: 'mid' })
+  eq('开得起来', getStyle(GID).style, 'sunbar')
+  const short = styleBlock(GID)
+  const full = styleBlock(GID, { full: true })
+  ok('短块提到孙吧', short.includes('孙吧'))
+  ok('短块给了词库/反问这类可执行的东西', /反问|降维|急了|破防/.test(short))
+  ok('长块比短块长很多', full.length > short.length * 2, `${short.length} vs ${full.length}`)
+  ok('长块有雷区说明（防举报封号）', full.includes('雷区') || full.includes('不碰'))
+  ok('孙吧档精简人设不再说"温柔、不阴阳"', !styleShortPersona().includes('不阴阳'))
+
+  const bias = styleBias(GID)
+  ok('孙吧档概率放大（>1）', bias.replyProbMul > 1)
+  ok('孙吧档放宽刷屏阈值', bias.spamThreshold > 8)
+  ok('孙吧档缩短冷却', Number(bias.policy.cooldownSec) < 60)
+
+  setStyle(GID, 'sunbar', { by: 'test', intensity: 'heavy' })
+  ok('重档比中档更凶', styleBias(GID).replyProbMul > bias.replyProbMul)
+  setStyle(GID, 'normal', { by: 'test' })
+  eq('关得掉', styleBlock(GID), '')
 }
 
 // ── 3. CQ 码 ──────────────────────────────────────────

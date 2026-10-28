@@ -21,13 +21,14 @@ import { record, maybeSummarize } from './context.mjs';
 import { generate } from './generate.mjs';
 import { learn, lookup, download, imageCQ, pickSticker } from './media.mjs';
 import { makeVoice, makeVoiceFull, recordCQ, judgeSong } from './voice.mjs';
+import { styleBias } from './style.mjs';
 import { hotwords, gather } from './search.mjs';
 import * as commands from './commands.mjs';
 import { chat } from './llm.mjs';
 import { shortPersona, ANCHOR } from './persona.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
-const CFG_FILE = process.env.GROUP_CFG || (DIR + '../group-allowlist.json');
+const CFG_FILE = DIR + '../group-allowlist.json';
 
 export const SELF = String(process.env.SELF_QQ ?? '');
 
@@ -131,19 +132,16 @@ export async function handleGroupMessage(evt, { callApi }) {
   const replyToMe = replyMatch ? store.isMyMessage(gid, replyMatch[1]) : false;
   const hasImage = (parsed.images?.length ?? 0) > 0;
 
-  // ── 刷屏判定（主人豁免；阈值/静默时长可在群策略里调）──
-  // ⚠️ 2026-10-29 线上真实故障：对骂时对方 8 条/分钟就被判刷屏、锁 10 分钟，
-  //    之后**连 @ 都不回** —— 使用者看到的是「被骂了几句突然不理人」。
-  //    现在：① 硬触发（@/回复/叫名字）不受刷屏静默影响；
-  //         ② 阈值和时长交给群策略（spamThreshold / spamSeconds），对骂场景自己放宽。
+  // ── 刷屏判定（主人豁免；阈值/静默时长跟风格档走）──
+  // ⚠️ 2026-10-29 实际故障：对骂时对方 8 条/分钟就被判刷屏、锁 10 分钟，
+  //    之后连 @ 都不回 —— 用户看到的是"骂不过就不说话了"。
+  //    现在：① 硬触发（@/回复/叫名字）**不受刷屏静默影响**；② 孙吧档放宽到 20 条/2 分钟。
+  const bias = styleBias(gid);
   const hardTrigger = atMe || replyToMe
     || (policy.selfNick ?? []).some((n) => n && text.includes(n));
   const spam = commands.isOwner(uin, policy)
     ? { spam: false }
-    : members.checkSpam(uin, {
-      threshold: Number(policy.spamThreshold ?? 8),
-      seconds: Number(policy.spamSeconds ?? 600),
-    });
+    : members.checkSpam(uin, { threshold: bias.spamThreshold, seconds: bias.spamSeconds });
   if (spam.spam) {
     console.log(`  [group] ${name} 在刷屏，静默到 ${new Date(spam.until * 1000).toLocaleTimeString('zh-CN')}`
       + (hardTrigger ? '（但他点了名 → 照回）' : ''));
@@ -193,6 +191,21 @@ export async function handleGroupMessage(evt, { callApi }) {
     }
   }
 
+  // ── 找资源（谁都能让她找，跟点歌一个道理）──
+  // 起因（2026-10-29）：秦始皇让她「帮lcarus找个黄油，要缩略图」，她嘴上答应了没动。
+  // 两条原因：① 命令层只认主人；② 她根本没有"搜到图发出去"的出口。
+  // 现在：非主人只要是在跟她说话 + 说的是找东西，就走 find（谁都能点歌，谁都能找货）。
+  {
+    const toMe = atMe || replyToMe || /小鲸鱼|肥鱼大小姐/.test(text);
+    if (toMe) {
+      const look = commands.parseLookup(text);
+      if (look) {
+        const done = await runCommand(look, { gid, uin, name, policy, callApi, at: parsed.at ?? [], evt });
+        if (done) return;
+      }
+    }
+  }
+
   // ── 点歌（谁都能点，确定性路径，不经过模型）──
   // addressed = 这条是不是冲着小鲸鱼说的；"光秃秃一个放"必须被叫到才算点歌
   const addressed = atMe || /小鲸鱼/.test(text) || commands.isOwner(uin, policy);
@@ -227,6 +240,15 @@ export async function handleGroupMessage(evt, { callApi }) {
   let hw = [];
   try { hw = await hotwords(); } catch { /* 拿不到就算了 */ }
 
+  // 风格偏置：开了孙吧模式就更爱接话（×4 概率、主动额度≥8、冷却缩短）
+  const policyForDecide = bias.replyProbMul === 1 ? policy : {
+    ...policy,
+    replyProb: Number(policy.replyProb ?? 0.02) * bias.replyProbMul,
+    coldProb: Number(policy.coldProb ?? 0.08) * bias.coldProbMul,
+    dailyActive: Math.max(Number(policy.dailyActive ?? 3), 8),
+    ...bias.policy,
+  };
+
   const d = decide({
     text: displayText,
     atMe,
@@ -234,7 +256,7 @@ export async function handleGroupMessage(evt, { callApi }) {
     isWhale: members.isOtherWhale(name, policy.otherWhales?.pattern ?? '鲸鱼'),
     replyToMe,
     gapSec,
-    policy,
+    policy: policyForDecide,
     stats: store.loadStats(gid),
     member: hardTrigger ? { ...member, spamUntil: 0 } : member,
     lastSpoke: store.lastSpokeAt(gid),
@@ -456,7 +478,14 @@ async function runCommand(cmd, { gid, uin, name, policy, callApi, at, evt }) {
     return true;
   }
 
-  if (r.reply) await send(quote + r.reply);
+  if (r.reply) {
+    // 命令回复也支持 ||| 分多条（跟生成那条路一致，2026-10-29 补）
+    const parts = String(r.reply).split('|||').map((x) => x.trim()).filter(Boolean).slice(0, 3);
+    for (let i = 0; i < parts.length; i += 1) {
+      await send((i === 0 ? quote : '') + parts[i]);
+      if (i < parts.length - 1) await sleep(600 + Math.random() * 700);
+    }
+  }
   audit(gid, { gid, uin, cmd: cmd.kind, arg: cmd.arg, reply: r.reply });
   return true;
 }

@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { readJson, writeJson, STORE } from './store.mjs';
 import { HOST_MEDIA, toFileUrl } from './paths.mjs';
+import { fetchBuffer } from './goods.mjs';
 
 const GATEWAY = process.env.DSH_GATEWAY ?? 'http://127.0.0.1:8327/v1';
 const API_KEY = process.env.WORKBUDDY_GATEWAY_API_KEY ?? 'wb-gateway-local';
@@ -190,6 +191,31 @@ export function stickerCount() {
 /** 本地图片 → CQ 码（自动换成容器内路径） */
 export function imageCQ(absPath) {
   return `[CQ:image,file=${toFileUrl(absPath)}]`;
+}
+
+/**
+ * 从网上抓一张图、压一下、真的发到群里
+ * （以前只有表情包库这条路，所以"搜到的图"发不出去 —— 2026-10-29 补）
+ * @returns {Promise<{ok:boolean, path?:string, reason?:string}>}
+ */
+export async function sendPicture(gid, imageUrl, callApi, { maxWidth = 520 } = {}) {
+  if (!imageUrl) return { ok: false, reason: '没有图片地址' };
+  const dir = `${HOST_MEDIA}/images`;
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  try {
+    const buf = await fetchBuffer(imageUrl);
+    if (!buf || buf.length < 500) return { ok: false, reason: '图片没下下来' };
+    const name = `pic-${createHash('md5').update(buf).digest('hex').slice(0, 12)}.jpg`;
+    const out = `${dir}/${name}`;
+    await sharp(buf).resize(maxWidth, maxWidth, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 82 }).toFile(out);
+    const r = await callApi('send_group_msg', { group_id: Number(gid), message: imageCQ(out) });
+    const txt = JSON.stringify(r ?? {});
+    const ok = r?.status === 'ok' || r?.retcode === 0 || /EventChecker|rich media transfer failed/i.test(txt);
+    return ok ? { ok: true, path: out } : { ok: false, reason: `发送失败 ${txt.slice(0, 80)}` };
+  } catch (e) {
+    return { ok: false, reason: String(e?.message ?? e).slice(0, 80) };
+  }
 }
 
 /** 发出去用的实际文件：优先 small（压缩过），没有就用原图 */

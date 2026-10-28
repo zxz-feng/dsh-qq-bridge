@@ -11,6 +11,7 @@
  * 上下文里从不存 system，所以人设不会随轮数膨胀。
  */
 import { readJson, writeJson, STORE, nowSec, bumpStat } from './store.mjs';
+import { styleBlock, styleShortPersona, getStyle } from './style.mjs';
 import { buildContextBlock } from './context.mjs';
 import { profileLine, toneHint, load as loadMember } from './members.mjs';
 import { chat, usageLine } from './llm.mjs';
@@ -108,8 +109,11 @@ export async function generate({ gid, policy = {}, msg }) {
   const LONG_RE = /(推荐|讲讲|说说|介绍|解释|科普|详细|为什么|怎么办|怎么写|怎么弄|攻略|教程|书单|清单|总结|分析|对比|区别|原理|流程|步骤)/;
   const wantsLong = LONG_RE.test(msg.text);
 
+  // 风格档（孙吧模式等）：完整说明只在完整人设那轮发，平时一行压缩版
+  const st = styleBlock(gid, { full: useFull });
+
   const system = [
-    useFull ? fullPersona() : shortPersona(),
+    useFull ? fullPersona() : (getStyle(gid).style === 'sunbar' ? styleShortPersona() : shortPersona()),
     '',
     '【输出规则】',
     wantsLong
@@ -123,7 +127,7 @@ export async function generate({ gid, policy = {}, msg }) {
     '- [[pass]] 只能用在"这条根本不是跟你说话"的时候（群里别人互聊、你插不上嘴）。',
     '  被 @、被叫名字、被回复时**绝对不能 pass**，哪怕只是回一句"这个我不干哦"。',
     '- 不想接、被要求做不该做的事（骂人、冒充、发广告）：用一句短话温柔挡回去，不要沉默。',
-  ].join('\n');
+  ].join('\n') + (st ? '\n\n' + st : '');
 
   const userContent = `${ctxBlock}${searchBlock}${hotLine}\n\n【现在这条】${msg.name || msg.uin}: ${String(msg.text).slice(0, MAX_CHARS)}`;
 

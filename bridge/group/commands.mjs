@@ -12,6 +12,8 @@
  *   禁言 ≤ 300 秒；踢人不实现；改名片/头衔/群名不提供。
  */
 import { readJson, writeJson, STORE, nowSec } from './store.mjs';
+import { appendFileSync } from 'node:fs';
+import { setStyle, getStyle, STYLE_NAMES } from './style.mjs';
 import { mute, MUTE_MAX_SEC } from './admin.mjs';
 
 const SILENCE_MAX_MIN = Number(process.env.SILENCE_MAX_MIN ?? 60);
@@ -70,6 +72,12 @@ export function parseCommand(text) {
   if (!t) return null;
 
   const rules = [
+    // 孙吧模式开关（只有主人能调；顺序：关 → 开 → 查，反了会把「关掉孙吧」认成「开」）
+    { kind: 'sunbar_off', re: /(?:关|关闭|退出|停|收|别)\s*(?:掉|了)?\s*(?:孙吧|孙笑川|嘴臭|嘴毒|抽象)/ },
+    { kind: 'sunbar_on', re: /(?:开|打开|开启|启动|进入|上|来)\s*(?:个|一下)?\s*(?:孙吧|孙笑川|嘴臭|嘴毒|抽象)/ },
+    { kind: 'sunbar_status', re: /^(?:孙吧|孙笑川|嘴臭|嘴毒)(?:模式)?\s*(?:状态|开着|开了|开了吗|在不在)?[?？]?$/ },
+    // 「帮我找个 X」——找资源 +（要图的话）带缩略图
+    { kind: 'find', re: /^(?:[帮给][\u4e00-\u9fa5A-Za-z0-9_]{0,10}?|替我|求|要)?(?:找|搜|搞|弄|来|推荐|整)(?:个|一个|一张|一下|一找)?\s*(.{2,30})$/ },
     { kind: 'sing', re: /^(唱|来一段|来首|来点|放首歌?|放个歌|点歌|放)\s*(?:个|一首|首|一段|一下|点)?\s*(.*)$/ },
     { kind: 'sticker', re: /^(发个?表情包?|来张表情|发表情|来个表情)\s*(.*)$/ },
     { kind: 'mute', re: /^禁言\s*(.*)$/ },
@@ -82,15 +90,20 @@ export function parseCommand(text) {
   for (const { kind, re } of rules) {
     const m = t.match(re);
     if (!m) continue;
-    const arg = (m[2] ?? '').trim();
+    // sing/search 的正文在 m[2]；find 只有一个捕获组，正文在 m[1]（2026-10-29 踩过）
+    const arg = (m[2] ?? m[1] ?? '').trim();
     // ⚠️ 歌名要过 sanity 检查：否则"放开我的token要炸了"会被当成点歌
     const bare = arg.replace(FULL_RE, ' ').trim();
-    if (bare && !looksLikeTitle(bare)) return null;
+    // find 只在"确实是在找东西"时才认（不然"来找我"这种会被当成搜东西）
+    if (kind === 'find' && !/(黄油|galgame|游戏|本子|里番|资源|漫画|画师|作品|图|封面|缩略图|壁纸)/i.test(t)) return null;
+    // ⚠️ 只有需要"歌名/关键词"的命令才过这个检查；
+    //    不然别的规则（孙吧开关之类）捕获到什么都会被当成歌名判掉（2026-10-28 踩过）
+    if ((kind === 'sing' || kind === 'search') && bare && !looksLikeTitle(bare)) return null;
     // "唱完整版雨爱" / "整首雨爱" → 分段发
     const full = FULL_RE.test(arg) || FULL_RE.test(t);
     let seconds = null;
     if (kind === 'mute' || kind === 'silence') seconds = parseSeconds(arg) ?? parseSeconds(t);
-    return { kind, arg: arg.replace(FULL_RE, '').trim(), seconds, full };
+    return { kind, arg: arg.replace(FULL_RE, '').trim(), seconds, full, raw: t };
   }
   return null;
 }
@@ -105,6 +118,56 @@ export async function execute(cmd, ctx) {
   const { gid, policy, callApi } = ctx;
 
   switch (cmd.kind) {
+    // ── 孙吧模式（2026-10-28）──
+    // 主人一句话就切，不用改配置文件。切了之后：语气换成孙吧老哥、
+    // 决策器更爱接话（×4）、每轮多 90 字风格提醒（完整说明只在完整人设那轮发）。
+    case 'sunbar_on': {
+      const cur = getStyle(gid);
+      if (cur.style === 'sunbar') return { handled: true, reply: '早就开着呢，还要再开一遍？' };
+      const s = setStyle(gid, 'sunbar', { by: ctx.uin, intensity: /重|狠|猛/.test(cmd.raw ?? '') ? 'heavy' : 'mid' });
+      auditStyle(gid, ctx, s);
+      const lines = ['行，那我可不客气了', '从现在起嘴不饶人，别喊停'];
+      return { handled: true, reply: lines.join(' ||| ') };
+    }
+
+    case 'sunbar_off': {
+      const cur = getStyle(gid);
+      if (cur.style !== 'sunbar') return { handled: true, reply: '本来就没开' };
+      const s = setStyle(gid, 'normal', { by: ctx.uin });
+      auditStyle(gid, ctx, s);
+      return { handled: true, reply: '行行行，收着点 ||| 刚才说的别当真啊' };
+    }
+
+    case 'sunbar_status': {
+      const cur = getStyle(gid);
+      return {
+        handled: true,
+        reply: cur.style === 'sunbar'
+          ? `开着（强度 ${cur.intensity === 'heavy' ? '重' : '中'}，${cur.by ? '主人' : '默认'}切的）`
+          : '没开，正常营业',
+      };
+    }
+
+    case 'find': {
+      const kw = cleanLookupArg(cmd.arg);
+      if (!kw) return { handled: true, reply: '找啥呀，说个名字' };
+      const { findGoods } = await import('./goods.mjs');
+      const { sendPicture } = await import('./media.mjs');
+      const wantImg = /图|缩略图|封面|截图/.test(cmd.raw ?? '');
+      const r = await findGoods(kw);
+      if (!r.ok) return { handled: true, reply: `没搜着（${r.reason}）` };
+      const title = r.item.title.length > 42 ? `${r.item.title.slice(0, 42)}…` : r.item.title;
+      let imgNote = '';
+      if (wantImg) {
+        const pic = await sendPicture(gid, r.item.image, callApi);
+        imgNote = pic.ok ? '' : `（图没发出去：${pic.reason}）`;
+      }
+      return {
+        handled: true,
+        reply: `${title} ||| ${r.item.url} ${imgNote}`.trim(),
+      };
+    }
+
     case 'sing': {
       if (!cmd.arg) return { handled: true, reply: '唱什么呀，给个歌名' };
       return { handled: true, action: 'voice', arg: cmd.arg, reply: '' };
@@ -268,4 +331,50 @@ export function parseSong(text, { addressed = false } = {}) {
   }
 
   return null;
+}
+
+/** 切档记一笔（方便回查谁什么时候切的） */
+function auditStyle(gid, ctx, s) {
+  try {
+    appendFileSync(
+      `${STORE}/groups/${gid}/audit.jsonl`,
+      JSON.stringify({ ts: new Date().toISOString(), gid, uin: ctx.uin, name: ctx.name, style: s.style, intensity: s.intensity }) + '\n',
+    );
+  } catch { /* 记不上不影响 */ }
+}
+
+/**
+ * 只认"找东西"的轻量解析（给非主人用）
+ * 跟 parseCommand 的区别：只返回 find，别的一律 null，避免群友随口一句就被当成命令。
+ */
+export function parseLookup(text = '') {
+  const raw = String(text ?? '')
+    .replace(/@\d+/g, ' ')
+    .replace(/^[\s,，。、:：]*(小鲸鱼|肥鱼大小姐|肥鱼|鲸鱼)[\s,，。、:：]*/, '')   // 先剥称呼
+    .replace(/^[\s,，。、:：]+/, '')
+    .trim();
+  if (!raw || raw.length < 4) return null;
+  if (!/(黄油|galgame|游戏|本子|里番|资源|漫画|画师|作品|壁纸)/i.test(raw)) return null;
+  if (!/(找|搜|来个|来张|来点|搞个|弄个|推荐|求|要|整)/.test(raw)) return null;
+  const cmd = parseCommand(raw);
+  return cmd?.kind === 'find' ? cmd : null;
+}
+
+/**
+ * 把「找个 X」里的 X 洗干净
+ *   黄油来，要缩略图 → 黄油
+ *   张壁纸          → 壁纸
+ *   给我弄个本子     → 本子
+ * 顺序有讲究：先去逗号后面的附加要求，再 trim，然后才剥前后缀
+ * （先剥后缀再 trim 会剥不掉 —— 2026-10-29 踩过）
+ */
+export function cleanLookupArg(raw = '') {
+  return String(raw ?? '')
+    .replace(/[，,。；;、].*$/, ' ')
+    .trim()
+    .replace(/(要|给|带)?(缩略图|封面|截图|原图)/g, ' ')
+    .replace(/^(个|一个|一张|一下|来|找|张)\s*/, ' ')
+    .replace(/\s*(来|的|吧)$/, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
