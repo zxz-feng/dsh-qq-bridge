@@ -1,0 +1,22 @@
+node_modules/
+
+# ── 绝对不能进仓库的 ──
+config.json
+allowlist.json
+group-allowlist.json
+control.json
+*.session
+.env
+.env.*
+
+# 运行时产物
+*.log
+*.log.1
+inbox.jsonl
+replies.jsonl
+daily-count.json
+contexts/
+store/
+media/
+napcat-data/
+qrcode*.png
