@@ -39,6 +39,10 @@ dsh plugin --profile web add link:/绝对/路径/dsh-qq-bridge
 装完**重启一次 dsh**。默认 `enabled: true` 但**白名单是空的 = 谁都不回**，
 所以装上不会乱说话。
 
+> ⚠️ 如果报 `ERR_PNPM_IGNORED_BUILDS`（pnpm 12 把"跳过的构建脚本"当错误）：
+> 加一个开关 —— `dsh plugin --profile web add <本仓库地址> --config.strict-dep-builds=false`。
+> 不编译那几个可选原生加速件对本插件没有影响。
+
 ## 配（三步）
 
 ```text
