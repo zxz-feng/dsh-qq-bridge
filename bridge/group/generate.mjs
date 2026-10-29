@@ -18,6 +18,7 @@ import { chat, usageLine } from './llm.mjs';
 import { fullPersona, shortPersona, ANCHOR, personaVersion } from './persona.mjs';
 import { shouldSearch, extractQuery, gather, hotwords } from './search.mjs';
 import { fetchPage, pageBlock, extractUrl } from './webpage.mjs';
+import { searchPosts } from './tieba.mjs';
 import { lookupInfo, lookupCv } from './lookup.mjs';
 import { findPicture } from './findpic.mjs';
 
@@ -44,6 +45,7 @@ export function parseReply(raw, { maxParts = 2 } = {}) {
   const reads = [];   // [[read:URL]]   去读这个链接
   const infos = [];   // [[info:关键词]] 去查这个是什么
   const looks = [];   // [[look:关键词]] 去找一张图
+  const tiebas = [];  // [[tieba:关键词]] 去贴吧搜帖子（当搜索引擎用）
 
   text = text.replace(/\[\[sticker[:：]\s*([^\]]+)\]\]/gi, (_, v) => { stickers.push(String(v).trim()); return ' '; });
   text = text.replace(/\[\[voice[:：]\s*([^\]]+)\]\]/gi, (_, v) => { voices.push(String(v).trim()); return ' '; });
@@ -52,6 +54,7 @@ export function parseReply(raw, { maxParts = 2 } = {}) {
   text = text.replace(/\[\[read[:：]\s*([^\]]+)\]\]/gi, (_, v) => { reads.push(String(v).trim()); return ' '; });
   text = text.replace(/\[\[info[:：]\s*([^\]]+)\]\]/gi, (_, v) => { infos.push(String(v).trim()); return ' '; });
   text = text.replace(/\[\[look[:：]\s*([^\]]+)\]\]/gi, (_, v) => { looks.push(String(v).trim()); return ' '; });
+  text = text.replace(/\[\[tieba[:：]\s*([^\]]+)\]\]/gi, (_, v) => { tiebas.push(String(v).trim()); return ' '; });
 
   const parts = text
     .split(/\|\|\|/)
@@ -59,14 +62,14 @@ export function parseReply(raw, { maxParts = 2 } = {}) {
     .filter(Boolean)
     .slice(0, maxParts);   // 平时最多 2 条；长回答场景放到 4 条
 
-  return { parts, stickers, voices, sings, reads, infos, looks };
+  return { parts, stickers, voices, sings, reads, infos, looks, tiebas };
 }
 
 /**
  * 执行模型自己发起的工具请求（最多两个，宁少不滥）
  * @returns {Promise<{blocks:string[], pictures:object[], used:string[]}>}
  */
-async function runTools({ reads, infos, looks }) {
+async function runTools({ reads, infos, looks, tiebas = [] }) {
   const blocks = [];
   const pictures = [];
   const used = [];
@@ -90,6 +93,22 @@ async function runTools({ reads, infos, looks }) {
     blocks.push(r.block || `\n【查「${q}」没查到】`);
     used.push('info:' + q.slice(0, 30));
     console.log(`  [tool] 查了「${q}」${r.ok ? '' : '（没查到）'}`);
+  }
+
+  for (const q of tiebas.slice(0, 1)) {
+    if (budget <= 0) break;
+    budget -= 1;
+    const r = await searchPosts(q);
+    if (r.ok && r.items.length) {
+      const lines = r.items.slice(0, 6).map((x, i) =>
+        `${i + 1}. 《${x.title}》${x.forum ? `（${x.forum}吧）` : ''}${x.content && x.content !== x.title ? `：${x.content.slice(0, 70)}` : ''}`);
+      blocks.push(`\n【我在贴吧搜了「${q}」，找到 ${r.items.length} 条】\n${lines.join('\n')}`);
+      used.push('tieba:' + q.slice(0, 30));
+      console.log(`  [tool] 贴吧搜「${q}」→ ${r.items.length} 条`);
+    } else {
+      blocks.push(`\n【我在贴吧搜了「${q}」，没搜到】${r.reason ? `（${r.reason}）` : ''}`);
+      console.log(`  [tool] 贴吧搜「${q}」没结果：${r.reason || ''}`);
+    }
   }
 
   for (const q of looks.slice(0, 1)) {
@@ -189,6 +208,8 @@ export async function generate({ gid, policy = {}, msg, depth = 0, extra = '' })
         + '  · 有人要某角色/某作品的图 → 写 [[look:关键词]]（系统去找图并发出来）\n'
         + '  一轮最多两个标记；标记会被系统吃掉，不要在正文里解释它'
       : '- 材料已经在上面了：用你自己的话回答，**不要再写任何 [[...]] 标记**；查不到就说查不到',
+    '- [[tieba:关键词]] 去贴吧搜帖子。想知道「有没有人讨论过 / 网友怎么说 / 攻略 / 这个梗哪来的」，就用它；'
+      + '不用等别人给链接，你自己搜。',
     '- [[pass]] 只能用在"这条根本不是跟你说话"的时候（群里别人互聊、你插不上嘴）。',
     '  被 @、被叫名字、被回复时**绝对不能 pass**，哪怕只是回一句"这个我不干哦"。',
     '- 不想接、被要求做不该做的事（骂人、冒充、发广告）：用一句短话温柔挡回去，不要沉默。',
@@ -211,7 +232,7 @@ export async function generate({ gid, policy = {}, msg, depth = 0, extra = '' })
     + (searched ? ' | 已联网' : ''));
 
   if (/\[\[pass\]\]/i.test(raw) && raw.replace(/\[\[pass\]\]/gi, '').trim().length < 3) {
-    return { parts: [], stickers: [], voices: [], sings: [], reads: [], infos: [], looks: [], pictures: [], model, usage, searched, passed: true };
+    return { parts: [], stickers: [], voices: [], sings: [], reads: [], infos: [], looks: [], tiebas: [], pictures: [], model, usage, searched, passed: true };
   }
 
   const parsed = parseReply(raw.replace(/\[\[pass\]\]/gi, ''), { maxParts: wantsLong ? 4 : 2 });
@@ -223,9 +244,9 @@ export async function generate({ gid, policy = {}, msg, depth = 0, extra = '' })
     const autoUrl = extractUrl(msg.text);
     const worthAuto = autoUrl && (msg.atMe || msg.replyToMe || String(msg.text).trim().length <= 60);
     const reads = parsed.reads.length ? parsed.reads : (worthAuto ? [autoUrl] : []);
-    if (reads.length || parsed.infos.length || parsed.looks.length) {
+    if (reads.length || parsed.infos.length || parsed.looks.length || parsed.tiebas.length) {
       const { blocks, pictures, used } = await runTools({
-        reads, infos: parsed.infos, looks: parsed.looks,
+        reads, infos: parsed.infos, looks: parsed.looks, tiebas: parsed.tiebas,
       });
       if (blocks.length) {
         const r2 = await generate({ gid, policy, msg, depth: 1, extra: '\n' + blocks.join('\n') });

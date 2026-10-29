@@ -69,8 +69,9 @@ t('pageBlock 成功时带站点与正文', () => {
 });
 
 // ── 标记解析 ──
-t('parseReply 吃掉 read/info/look 三个标记', () => {
-  const r = gen.parseReply('看看[[read:https://a.com]]|||这个[[look:结城希亚]]|||[[info:乌有乡]]');
+t('parseReply 吃掉 read/info/look/tieba 四个标记', () => {
+  const r = gen.parseReply('看看[[read:https://a.com]]|||这个[[look:结城希亚]]|||[[info:乌有乡]]|||[[tieba:乌有乡 攻略]]');
+  assert.deepEqual(r.tiebas, ['乌有乡 攻略']);
   assert.deepEqual(r.reads, ['https://a.com']);
   assert.deepEqual(r.looks, ['结城希亚']);
   assert.deepEqual(r.infos, ['乌有乡']);
