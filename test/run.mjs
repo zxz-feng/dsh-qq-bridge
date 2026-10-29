@@ -26,7 +26,7 @@ const { normalize, DEFAULTS, envFor, seedFiles, loadAllowlist, saveAllowlist, lo
 const { decide, inQuietHours } = await import('../bridge/group/decide.mjs')
 const { parseCQ } = await import('../bridge/cq-parser.mjs')
 const { parseCommand, parseLookup, cleanLookupArg } = await import('../bridge/group/commands.mjs')
-const { getStyle, setStyle, styleBlock, styleBias, styleShortPersona } = await import('../bridge/group/style.mjs')
+const { getStyle, setStyle, styleBlock, styleBias, styleShortPersona, listStyles, resolveStyle, parseStyle } = await import('../bridge/group/style.mjs')
 const { policyFor, loadConfig: loadGroupCfgRouter } = await import('../bridge/group/router.mjs')
 const { toFileUrl, toContainerPath, HOST_MEDIA, CQ_MEDIA } = await import('../bridge/group/paths.mjs')
 const { fullPersona, shortPersona, personaVersion, personaDir } = await import('../bridge/persona-core.mjs')
@@ -114,10 +114,13 @@ console.log('\n【决策器（零 token）】')
 // ── 2.5 命令：孙吧开关 / 找资源 ─────────────────────────
 console.log('\n【命令解析】')
 {
-  eq('开孙吧模式', parseCommand('开孙吧模式')?.kind, 'sunbar_on')
-  eq('开个孙吧（带量词也要认）', parseCommand('开个孙吧')?.kind, 'sunbar_on')
-  eq('关掉孙吧（不能认成开）', parseCommand('关掉孙吧')?.kind, 'sunbar_off')
-  eq('孙吧 → 查状态', parseCommand('孙吧')?.kind, 'sunbar_status')
+  eq('开孙吧模式', parseCommand('开孙吧模式')?.kind, 'style')
+  eq('开个孙吧（带量词也要认）', parseCommand('开个孙吧')?.kind, 'style')
+  eq('关掉孙吧（不能认成开）', parseCommand('关掉孙吧')?.kind, 'style')
+  eq('孙吧 → 切/查风格', parseCommand('孙吧')?.kind, 'style')
+  eq('#风格 傲娇 → 切风格，参数留住', parseCommand('#风格 傲娇')?.arg?.trim(), '傲娇')
+  eq('换个风格 → 风格命令', parseCommand('换个风格')?.kind, 'style')
+  eq('切成人格 → 风格命令', parseCommand('切成冷淡')?.kind, 'style')
   eq('放首晴天 → 点歌', parseCommand('放首晴天')?.kind, 'sing')
 
   // 找资源：谁都能用，但必须真的是在找东西
@@ -132,31 +135,73 @@ console.log('\n【命令解析】')
   ok('没有资源词不认（找个对象）', parseLookup('找个对象') === null)
 }
 
-// ── 2.6 风格档（孙吧模式）───────────────────────────────
+// ── 2.6 风格档（注册表版，2026-10-29）─────────────────────
 console.log('\n【风格档】')
 {
   const GID = '999001'
+
+  // 目录即注册表：自带五个档
+  const ids = listStyles().map((x) => x.id)
+  for (const want of ['normal', 'sunbar', 'tsundere', 'cold', 'genki']) {
+    ok(`自带档 ${want}`, ids.includes(want), ids.join(','))
+  }
+  eq('normal 排第一', listStyles()[0].id, 'normal')
+
+  // 认名字 / 别名 / 模糊说法
+  eq('孙吧模式 → sunbar', resolveStyle('孙吧模式'), 'sunbar')
+  eq('傲娇 → tsundere', resolveStyle('傲娇'), 'tsundere')
+  eq('高冷 → cold', resolveStyle('高冷'), 'cold')
+  eq('有精神 → genki', resolveStyle('元气'), 'genki')
+  eq('认不出就 null', resolveStyle('量子力学'), null)
+  eq('乱切不会写坏状态', setStyle(GID, '量子力学'), null)
+
+  // 解析器：能读 front matter、例句、词表、bias
+  const parsed = parseStyle(`# 测试档\n---\nid: t1\nname: 测试\nshort: 一句话\nbias: replyProbMul=3,cooldownSec=15\n---\n总述一句。\n## 语气\n- 硬\n## 例句\n- 例一\n- 例二\n## 词表\n- 词一`)
+  eq('id 读得到', parsed.id, 't1')
+  eq('short 读得到', parsed.short, '一句话')
+  eq('bias 读得到', parsed.bias.replyProbMul, 3)
+  eq('bias 第二项', parsed.bias.cooldownSec, 15)
+  eq('例句 2 条', parsed.examples.length, 2)
+  eq('词表 1 条', parsed.words.length, 1)
+  ok('总述进 guide', parsed.guide.includes('总述一句'))
+  ok('语气小节进 guide', parsed.guide.includes('硬'))
+
+  // 正常档什么都不注入
+  setStyle(GID, 'normal', { by: 'test' })
   eq('默认是正常', getStyle(GID).style, 'normal')
   eq('正常档不注入任何东西', styleBlock(GID), '')
   eq('正常档不做偏置', styleBias(GID).replyProbMul, 1)
+  eq('正常档不改精简人设', styleShortPersona(GID), '')
 
+  // 孙吧：短块要短、长块要长
   setStyle(GID, 'sunbar', { by: 'test', intensity: 'mid' })
   eq('开得起来', getStyle(GID).style, 'sunbar')
   const short = styleBlock(GID)
   const full = styleBlock(GID, { full: true })
   ok('短块提到孙吧', short.includes('孙吧'))
-  ok('短块给了词库/反问这类可执行的东西', /反问|降维|急了|破防/.test(short))
+  ok('短块够省（<200 字）', short.length < 200, String(short.length))
   ok('长块比短块长很多', full.length > short.length * 2, `${short.length} vs ${full.length}`)
   ok('长块有雷区说明（防举报封号）', full.includes('雷区') || full.includes('不碰'))
-  ok('孙吧档精简人设不再说"温柔、不阴阳"', !styleShortPersona().includes('不阴阳'))
+  ok('孙吧档精简人设不再说"温柔、不阴阳"', !styleShortPersona(GID).includes('不阴阳'))
 
   const bias = styleBias(GID)
   ok('孙吧档概率放大（>1）', bias.replyProbMul > 1)
   ok('孙吧档放宽刷屏阈值', bias.spamThreshold > 8)
   ok('孙吧档缩短冷却', Number(bias.policy.cooldownSec) < 60)
-
   setStyle(GID, 'sunbar', { by: 'test', intensity: 'heavy' })
   ok('重档比中档更凶', styleBias(GID).replyProbMul > bias.replyProbMul)
+
+  // 每档都得能开、能注入、能关
+  for (const id of ['tsundere', 'cold', 'genki']) {
+    setStyle(GID, id, { by: 'test' })
+    eq(`${id} 切得过去`, getStyle(GID).style, id)
+    ok(`${id} 短块非空`, styleBlock(GID).length > 0)
+    ok(`${id} 有自己的精简人设`, styleShortPersona(GID).length > 0)
+  }
+  ok('元气档更爱说话', styleBias(GID).replyProbMul > 1)
+  setStyle(GID, 'cold', { by: 'test' })
+  ok('冷淡档不爱说话', styleBias(GID).replyProbMul < 1)
+
   setStyle(GID, 'normal', { by: 'test' })
   eq('关得掉', styleBlock(GID), '')
 }

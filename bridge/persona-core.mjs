@@ -12,7 +12,7 @@
  * `persona/` 铺一份过去（所以换机器装完就有默认人设）。
  * ============================================================================
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,7 +21,12 @@ import { dshHome } from '../lib/home.mjs'
 const BUNDLED = join(dirname(fileURLToPath(import.meta.url)), '..', 'persona')
 const ALL = ['renshe.txt', 'guard.txt', 'extra-qq-group.txt', 'extra-qq-group-short.txt', 'extra-qq.txt', 'extra-qq-short.txt']
 
-/** 人设目录（缺文件就铺内置默认值） */
+/**
+ * 人设目录（缺文件就铺内置默认值）
+ *
+ * 除了那几份 txt，还会把 `styles/*.md`（说话风格档）铺过去：
+ * 只补缺的，不覆盖 —— 主人改过的档位文件永远优先。
+ */
 export function personaDir() {
   const dir = process.env.PERSONA_DIR || join(dshHome(), 'persona')
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
@@ -32,7 +37,23 @@ export function personaDir() {
     if (!existsSync(src)) continue
     try { copyFileSync(src, dst) } catch { /* 写不了就算了 */ }
   }
+  seedStyles(dir)
   return dir
+}
+
+/** 把内置风格档铺到 <dir>/styles/（只补缺，不覆盖） */
+function seedStyles(dir) {
+  const srcDir = join(BUNDLED, 'styles')
+  const dstDir = join(dir, 'styles')
+  let files = []
+  try { files = readdirSync(srcDir).filter((f) => f.endsWith('.md')) } catch { return }
+  if (!files.length) return
+  try { if (!existsSync(dstDir)) mkdirSync(dstDir, { recursive: true }) } catch { return }
+  for (const f of files) {
+    const dst = join(dstDir, f)
+    if (existsSync(dst)) continue
+    try { copyFileSync(join(srcDir, f), dst) } catch { /* 写不了就算了 */ }
+  }
 }
 
 function read(dir, name, fallback = '') {

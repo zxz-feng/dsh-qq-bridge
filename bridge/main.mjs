@@ -19,6 +19,7 @@ import { homedir } from 'node:os'
 import { loadConfig, seedFiles, envFor, paths, loadAllowlist, loadGroupCfg, saveConfig } from './config.mjs'
 import { startControl } from './control.mjs'
 import { T } from '../lib/protocol.mjs'
+import { getStyle, setStyle, listStyles } from './group/style.mjs'
 
 const HOME = process.env.BRIDGE_HOME || join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'qq-bridge')
 
@@ -287,6 +288,21 @@ const actions = {
 
   async allowlist() {
     return { allow: loadAllowlist(HOME), group: loadGroupCfg(HOME) }
+  },
+
+  // 说话风格档：切/查/列。校验放在桥里，宿主工具只转发（一份真相）
+  async style({ gid, style, intensity } = {}) {
+    if (!gid) throw new Error('style 需要 gid')
+    const id = String(gid)
+    if (!style) {
+      return { ok: true, gid: id, ...getStyle(id), available: listStyles().map((x) => ({ id: x.id, name: x.name, aliases: x.aliases })) }
+    }
+    const s = setStyle(id, style, { by: 'tool', intensity })
+    if (!s) {
+      const names = listStyles().map((x) => `${x.id}(${x.name})`).join(' / ')
+      throw new Error(`没有这个风格：${style}；可选 ${names}`)
+    }
+    return { ok: true, gid: id, ...s }
   },
 
   async restart_self() {

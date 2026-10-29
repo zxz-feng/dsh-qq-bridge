@@ -11,7 +11,7 @@
  * 上下文里从不存 system，所以人设不会随轮数膨胀。
  */
 import { readJson, writeJson, STORE, nowSec, bumpStat } from './store.mjs';
-import { styleBlock, styleShortPersona, getStyle } from './style.mjs';
+import { styleBlock, styleShortPersona } from './style.mjs';
 import { buildContextBlock } from './context.mjs';
 import { profileLine, toneHint, load as loadMember } from './members.mjs';
 import { chat, usageLine } from './llm.mjs';
@@ -113,7 +113,8 @@ export async function generate({ gid, policy = {}, msg }) {
   const st = styleBlock(gid, { full: useFull });
 
   const system = [
-    useFull ? fullPersona() : (getStyle(gid).style === 'sunbar' ? styleShortPersona() : shortPersona()),
+    // 风格档自带精简人设（傲娇/冷淡/孙吧各有各的），normal 档返回空串 → 用默认那句
+    useFull ? fullPersona() : (styleShortPersona(gid) || shortPersona()),
     '',
     '【输出规则】',
     wantsLong

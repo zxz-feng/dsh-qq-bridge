@@ -77,7 +77,7 @@ qq_config { "llm": { "models": ["deepseek-v4.1-flash", "hy3"] } }
 | `qq_send_group` | 往群里发一条（`dryRun:true` 只试不真发） |
 | `qq_groups` | 每个群的有效策略（继承 defaults 之后） |
 | `qq_qr` | 取登录二维码（需配 `napcat.qrUrl` 或 `napcat.webui`） |
-| `qq_style` | 看/切某个群的说话风格档（`normal` / `sunbar`，可 `heavy`） |
+| `qq_style` | 看/切某个群的说话风格档（`normal`/`sunbar`/`tsundere`/`cold`/`genki`，可 `heavy`） |
 | `qq_stickers` | 表情包库现状 |
 | `qq_restart` / `qq_log` | 重启 / 看日志 |
 
@@ -97,31 +97,86 @@ DLsite 搜索 → 取作品页 og:title / og:image → 下载封面 → 压到 5
   资源词要有（黄油/galgame/游戏/本子/番/资源/漫画/画师/作品/壁纸/图/封面/缩略图）。
 - 语序太绕的（「黄油有吗」）不认，会落到普通聊天 —— 她可以反问一句。
 
-## 孙吧模式（风格档）
+## 说话风格档（性格随便换）
 
-主人一句话就切，也可以从命令行/工具切：
+风格是**目录即注册表**：`persona/styles/*.md` 里放一个文件就多一档，不用改代码、不用重启。
+自带五档：
+
+| 档 | id | 一句话 |
+|---|---|---|
+| 正常 | `normal` | 默认，温柔短句（不注入任何东西，最省） |
+| 孙吧 | `sunbar` | 短、损、反问收尾，被怼立刻加倍还嘴 |
+| 傲娇 | `tsundere` | 嘴上不认，「才不是」「谁要」，被夸炸毛 |
+| 冷淡 | `cold` | 2~6 字，句号收尾，不接梗不解释 |
+| 元气 | `genki` | 语气上扬，短句带感叹号，爱接话 |
+
+怎么切（只有主人号能切）：
 
 ```
-群聊里（主人号）：  开孙吧模式 / 关掉孙吧 / 孙吧（查状态）
-命令行：            node scripts/style.mjs <群号> sunbar [mid|heavy] | normal
-DSH 工具：          qq_style { gid, style: "sunbar", intensity: "heavy" }
+群聊里：  #风格 傲娇        ← 切档（也认 开孙吧模式 / 换成冷淡 / 切成人格 元气）
+          #风格 傲娇 重      ← 带「重/狠/猛」= heavy 强度
+          #风格 关           ← 回正常（也认 关掉孙吧 / 正常）
+          #风格              ← 看现在哪档 + 有哪些档
+命令行：  node scripts/style.mjs <群号> <档> [mid|heavy]      # 切
+          node scripts/style.mjs <群号> --list                 # 列
+DSH 工具：qq_style { gid, style: "tsundere", intensity: "mid" }
 ```
 
-开了之后变的不只是语气：
+切档不只是换语气，决策器也跟着变（数值写在档位文件的 `bias:` 里）：
 
-| 项 | 正常 | 孙吧（中） | 孙吧（重） |
-|---|---|---|---|
-| 软触发接话概率 | 2% | 8% | 20% |
-| 冷场插话 | 8% | 16% | 24% |
-| 每日主动发言上限 | 3 | 8 | 8 |
-| 全局冷却 / 每人冷却 | 60s / 5min | **20s / 30s** | 10s / 15s |
-| 刷屏判定 | 8 条/10 分钟 | **20 条/2 分钟** | 30 条/90 秒 |
+| 档 | 接话概率 | 冷场插话 | 全局冷却 | 每人冷却 | 刷屏判定 |
+|---|---|---|---|---|---|
+| normal | ×1 | ×1 | 60s | 5min | 8 条/10 分钟 |
+| sunbar | ×4 | ×2 | 20s | 30s | 20 条/2 分钟 |
+| tsundere | ×2.5 | ×1.5 | 30s | 2min | 12 条/5 分钟 |
+| cold | ×0.4 | ×0.6 | 120s | 8min | 6 条/15 分钟 |
+| genki | ×1.8 | ×1.5 | 45s | 3min | 10 条/10 分钟 |
 
-风格说明在 `bridge/style-sunbar.txt`（**纯文本，可以直接改**）：里面写的是**语法**不是词表 ——
-定性→抓细节→反问收尾、**别替自己辩解**（要换战场打对方）、脏字一句最多一个、短到 3~15 字。
-还写了一条硬边界：不碰地域/家人/学校/职业/外貌/疾病（群友一举报，号就没了）。
+强度 `heavy` 会把概率再抬一档、冷却再砍一半。
 
-分层发送：完整说明只在「完整人设」那几轮发（首次 / 每 N 轮 / 改人设后），平时一行压缩版提醒。
+### 加一档 = 写一个文件
+
+`persona/styles/<id>.md`：
+
+```markdown
+# 显示名
+---
+id: tsundere
+name: 傲娇
+aliases: 傲娇, 大小姐, 嘴硬
+short: 一行压缩版（每轮都发，务必 <60 字）
+persona: 顶掉默认「温柔」那句的精简人设
+bias: replyProbMul=2.5,cooldownSec=30
+---
+## 语气
+（完整说明，只在完整人设那轮发）
+## 例句
+- 才不是呢
+## 词表
+- 哼
+```
+
+改文件即时生效（按 mtime 缓存，不重启）。缺文件会自动从插件自带的那份补上，**改过的不会被覆盖**。
+
+### 省 token 的三层
+
+1. 每轮只发 `short`（一行，~60 字）；
+2. 完整说明 + 例句 + 词表，只在「完整人设」那轮发（首次 / 每 8 轮 / 改人设后）；
+3. 例句和词表**按天轮换**（8 条 / 6 条），不整锅倒进去。
+
+### 语料：只提炼语感，不搬内容
+
+`scripts/style-corpus.mjs` 从 GitHub 公开语料里提炼「语感特征」，生成档位文件的初稿：
+
+```
+node scripts/style-corpus.mjs --list           # 看能用的语料库
+node scripts/style-corpus.mjs --analyze <库>   # 统计（句长/句尾/口头词/反问率）
+node scripts/style-corpus.mjs --draft sunbar   # 出初稿到 /tmp，人工挑
+```
+
+**底线：政治内容一律不进语料、不进档位文件。** 抓取阶段按词表硬过滤（政治人物/事件/宣传），
+提炼阶段只取「句长、句尾语气、口头词、反问比例」这类统计量，不复制原句。
+这条不是可选项 —— 群是公开场合，沾上就没法收拾。
 
 ## 群策略（`group-allowlist.json`）
 
@@ -191,8 +246,9 @@ bridge/
     goods.mjs       找资源 + 缩略图（DLsite → og:image → 发图）
     hostsearch.mjs  找宿主借联网搜索（127.0.0.1 小门，可选）
     search.mjs      四源并发：宿主 / DDG lite / B站 / 维基
-    style.mjs       风格档（孙吧模式）读写 + 提示词注入 + 决策偏置
-    style-sunbar.txt  孙吧模式的具体说明（纯文本，可改）
+    style.mjs       风格档注册表：读 persona/styles/*.md + 提示词注入 + 决策偏置
+  persona/styles/    ★ 风格档（一个 .md 一档，丢文件就多一档）
+    normal.md sunbar.md tsundere.md cold.md genki.md
   tools/bili.py     B站搜索/热词（Python）
 test/               零 token 离线测试 + 回放脚本
 scripts/            verify / import-stickers / style（命令行切档）

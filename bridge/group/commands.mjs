@@ -13,7 +13,7 @@
  */
 import { readJson, writeJson, STORE, nowSec } from './store.mjs';
 import { appendFileSync } from 'node:fs';
-import { setStyle, getStyle, STYLE_NAMES } from './style.mjs';
+import { setStyle, getStyle, listStyles, resolveStyle, getStyleDef } from './style.mjs';
 import { mute, MUTE_MAX_SEC } from './admin.mjs';
 
 const SILENCE_MAX_MIN = Number(process.env.SILENCE_MAX_MIN ?? 60);
@@ -72,10 +72,13 @@ export function parseCommand(text) {
   if (!t) return null;
 
   const rules = [
-    // 孙吧模式开关（只有主人能调；顺序：关 → 开 → 查，反了会把「关掉孙吧」认成「开」）
-    { kind: 'sunbar_off', re: /(?:关|关闭|退出|停|收|别)\s*(?:掉|了)?\s*(?:孙吧|孙笑川|嘴臭|嘴毒|抽象)/ },
-    { kind: 'sunbar_on', re: /(?:开|打开|开启|启动|进入|上|来)\s*(?:个|一下)?\s*(?:孙吧|孙笑川|嘴臭|嘴毒|抽象)/ },
-    { kind: 'sunbar_status', re: /^(?:孙吧|孙笑川|嘴臭|嘴毒)(?:模式)?\s*(?:状态|开着|开了|开了吗|在不在)?[?？]?$/ },
+    // 风格档（只有主人能调）。一个 kind 管全部：切/关/查/列。
+    // 顺序：关 → 通用切换 → 开 → 裸名字，反了会把「关掉孙吧」认成「开」
+    { kind: 'style', re: /^(?:关|关闭|退出|停|收|别)\s*(?:掉|了)?\s*(?:风格|人格|性格|模式|孙吧|孙笑川|嘴臭|嘴毒|抽象|傲娇|冷淡|元气)\s*$/ },
+    { kind: 'style', re: /^[#/／]?\s*(?:换成|切成|换|切|改|设置|换个|切个)?\s*(?:个)?\s*(?:风格|人格|性格)\s*(.*)$/ },
+    { kind: 'style', re: /^(?:换成|切成)\s*(.+)$/ },
+    { kind: 'style', re: /^(?:开|打开|开启|启动|进入|上|来)\s*(?:个|一下)?\s*(?:孙吧|孙笑川|嘴臭|嘴毒|抽象|傲娇|冷淡|元气|风格)(?:\s*模式)?\s*$/ },
+    { kind: 'style', re: /^(?:孙吧|孙笑川|嘴臭|嘴毒|傲娇|冷淡|元气)(?:模式)?\s*(?:状态|开着|开了|开了吗|在不在)?[?？]?$/ },
     // 「帮我找个 X」——找资源 +（要图的话）带缩略图
     { kind: 'find', re: /^(?:[帮给][\u4e00-\u9fa5A-Za-z0-9_]{0,10}?|替我|求|要)?(?:找|搜|搞|弄|来|推荐|整)(?:个|一个|一张|一下|一找)?\s*(.{2,30})$/ },
     { kind: 'sing', re: /^(唱|来一段|来首|来点|放首歌?|放个歌|点歌|放)\s*(?:个|一首|首|一段|一下|点)?\s*(.*)$/ },
@@ -118,34 +121,55 @@ export async function execute(cmd, ctx) {
   const { gid, policy, callApi } = ctx;
 
   switch (cmd.kind) {
-    // ── 孙吧模式（2026-10-28）──
-    // 主人一句话就切，不用改配置文件。切了之后：语气换成孙吧老哥、
-    // 决策器更爱接话（×4）、每轮多 90 字风格提醒（完整说明只在完整人设那轮发）。
-    case 'sunbar_on': {
+    // ── 风格档（2026-10-29 改成注册表）──
+    // 一个 kind 管切/关/查/列：`#风格 孙吧`、`#风格 关`、`#风格`。
+    // 加一档不用改代码 —— 往 persona/styles/ 丢一个 .md 就行。
+    case 'style': {
+      const raw = String(cmd.raw ?? '');
+      const arg = String(cmd.arg ?? '').trim();
       const cur = getStyle(gid);
-      if (cur.style === 'sunbar') return { handled: true, reply: '早就开着呢，还要再开一遍？' };
-      const s = setStyle(gid, 'sunbar', { by: ctx.uin, intensity: /重|狠|猛/.test(cmd.raw ?? '') ? 'heavy' : 'mid' });
-      auditStyle(gid, ctx, s);
-      const lines = ['行，那我可不客气了', '从现在起嘴不饶人，别喊停'];
-      return { handled: true, reply: lines.join(' ||| ') };
-    }
+      const list = listStyles();
+      const menu = list.map((x) => `${x.name}(#${x.id})`).join(' / ');
+      const statusLine = cur.style === 'normal'
+        ? '正常档'
+        : `${getStyleDef(cur.style)?.name ?? cur.style}${cur.intensity === 'heavy' ? '·重' : ''}`;
 
-    case 'sunbar_off': {
-      const cur = getStyle(gid);
-      if (cur.style !== 'sunbar') return { handled: true, reply: '本来就没开' };
-      const s = setStyle(gid, 'normal', { by: ctx.uin });
-      auditStyle(gid, ctx, s);
-      return { handled: true, reply: '行行行，收着点 ||| 刚才说的别当真啊' };
-    }
+      if (/列表|有哪些|所有|都有啥|list/i.test(arg)) {
+        return { handled: true, reply: `现在：${statusLine} ||| 可选：${menu}` };
+      }
 
-    case 'sunbar_status': {
-      const cur = getStyle(gid);
-      return {
-        handled: true,
-        reply: cur.style === 'sunbar'
-          ? `开着（强度 ${cur.intensity === 'heavy' ? '重' : '中'}，${cur.by ? '主人' : '默认'}切的）`
-          : '没开，正常营业',
+      // 想切成哪一档？关掉 → normal；没给参数就试着从原句里认个名字
+      let want = '';
+      if (/^(?:关|关闭|退出|停|收|别)/.test(raw) || /^(?:正常|原样|默认|关)$/.test(arg)) want = 'normal';
+      else if (arg) want = arg;
+      else {
+        const bare = raw
+          .replace(/^(?:开|打开|开启|启动|进入|上|来|换成|切成|换个|换|切个|切)\s*(?:个|一下)?\s*/, '')
+          .replace(/模式|状态|开着|开了吗|开了|在不在|[?？]/g, '')
+          .trim();
+        if (bare && resolveStyle(bare) && !/状态|开着|开了|在不在/.test(raw)) want = bare;
+      }
+
+      if (!want) return { handled: true, reply: `现在：${statusLine} ||| 可选：${menu}` };
+
+      const intensity = /重|狠|猛|凶/.test(arg) || /重|狠|猛|凶/.test(raw) ? 'heavy' : 'mid';
+      const clean = want.replace(/重|狠|猛|凶|模式|档|吧|啊|了/g, '').trim() || want;
+      const s = setStyle(gid, clean, { by: ctx.uin, intensity });
+      if (!s) return { handled: true, reply: `没这个风格 ||| 可选：${menu}` };
+      auditStyle(gid, ctx, s);
+
+      const ACK = {
+        normal: '行，正常了',
+        sunbar: '行，那我可不客气了',
+        tsundere: '哼，才不是想换的 ||| 就、就这一次',
+        cold: '嗯。',
+        genki: '好耶！换好啦 ||| 现在超有精神',
       };
+      const ack = ACK[s.style] ?? `好，切到${getStyleDef(s.style)?.name ?? s.style}了`;
+      if (s.style === cur.style && s.intensity === cur.intensity) {
+        return { handled: true, reply: `早就这样了 ||| ${ack}` };
+      }
+      return { handled: true, reply: ack };
     }
 
     case 'find': {
