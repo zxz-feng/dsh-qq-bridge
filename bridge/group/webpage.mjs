@@ -220,7 +220,18 @@ export async function fetchPage(url, { timeoutMs = 9000, q = '' } = {}) {
     if (!m) return { ok: false, site, reason: '这不是帖子地址（要 /p/数字 那种）' };
     const r = await tiebaCall('tieba_thread', { tid: m[1] });
     if (!r.ok) return { ok: false, site, reason: r.text.slice(0, 120) };
-    return { ok: true, site, title: `贴吧帖子 ${m[1]}`, text: String(r.text).slice(0, MAX_TEXT * 2), images: [], url: u };
+    // MCP 回的是 JSON（floors 数组），直接丢给模型又费 token 又难读 → 排成人话
+    let title = `贴吧帖子 ${m[1]}`;
+    let body = String(r.text);
+    try {
+      const j = JSON.parse(body);
+      title = j.title || title;
+      const kw = j.kw ? `吧「${j.kw}」` : '';
+      const floors = Array.isArray(j.floors) ? j.floors : [];
+      const lines = floors.slice(0, 6).map((f, i) => `${i + 1}楼：${String(f).replace(/\s+/g, ' ').slice(0, 220)}`);
+      body = `${kw}《${title}》共 ${floors.length} 楼\n${lines.join('\n')}`;
+    } catch { /* 不是 JSON 就原样给 */ }
+    return { ok: true, site, title, text: body.slice(0, MAX_TEXT * 2), images: [], url: u };
   }
 
   // ② 登录墙：直接认输，别耗 8 秒
