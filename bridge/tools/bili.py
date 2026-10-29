@@ -15,13 +15,14 @@ B站小工具（给 QQ 群聊用）
 """
 import asyncio
 import json
+import os
 import sys
 
-sys.path.insert(0, '/root/dsh/bili-duty')
+sys.path.insert(0, os.environ.get('BILI_SITE', '/root/dsh/bili-duty'))
 
 from bilibili_api import search, hot, video, Credential  # noqa: E402
 
-CRED_FILE = '/root/dsh/bili-duty/bili_credential.json'
+CRED_FILE = os.environ.get('BILI_CRED', '/root/dsh/bili-duty/bili_credential.json')
 
 
 def load_cred():

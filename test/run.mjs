@@ -27,6 +27,7 @@ const { decide, inQuietHours } = await import('../bridge/group/decide.mjs')
 const { parseCQ } = await import('../bridge/cq-parser.mjs')
 const { parseCommand, parseLookup, cleanLookupArg } = await import('../bridge/group/commands.mjs')
 const { getStyle, setStyle, styleBlock, styleBias, styleShortPersona } = await import('../bridge/group/style.mjs')
+const { policyFor, loadConfig: loadGroupCfgRouter } = await import('../bridge/group/router.mjs')
 const { toFileUrl, toContainerPath, HOST_MEDIA, CQ_MEDIA } = await import('../bridge/group/paths.mjs')
 const { fullPersona, shortPersona, personaVersion, personaDir } = await import('../bridge/persona-core.mjs')
 const groupPersona = await import('../bridge/group/persona.mjs')
@@ -158,6 +159,23 @@ console.log('\n【风格档】')
   ok('重档比中档更凶', styleBias(GID).replyProbMul > bias.replyProbMul)
   setStyle(GID, 'normal', { by: 'test' })
   eq('关得掉', styleBlock(GID), '')
+}
+
+// ── 2.7 群策略必须真的读得到（2026-10-29 静默故障的回归测试）──
+console.log('\n【群策略读取】')
+{
+  // 曾经的 bug：router 里写死 `DIR + '../group-allowlist.json'`，插件里那个路径不存在，
+  // JSON.parse 抛异常 → 返回 { groups: {} } → policyFor 全 null → **群消息被静默丢弃**
+  // （连日志都没有，表现就是"群里完全没反应"）。
+  saveGroupCfg(HOME, { groups: { '123456789': { label: '测试群', dryRun: true } } })
+  ok('GROUP_CFG 指向的文件被 router 读到了', Object.keys(loadGroupCfgRouter()?.groups ?? {}).includes('123456789'))
+  ok('白名单里的群拿得到策略', policyFor('123456789') !== null)
+  eq('policyFor 会继承 defaults（dryRun 取群里的）', policyFor('123456789')?.dryRun, true)
+  ok('不在白名单的群返回 null（该忽略就忽略）', policyFor('999999') === null)
+  eq('enabled:false 的群返回 null', (() => {
+    saveGroupCfg(HOME, { groups: { '222222': { enabled: false } } })
+    return policyFor('222222')
+  })(), null)
 }
 
 // ── 3. CQ 码 ──────────────────────────────────────────

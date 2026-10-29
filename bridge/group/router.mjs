@@ -28,7 +28,8 @@ import { chat } from './llm.mjs';
 import { shortPersona, ANCHOR } from './persona.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
-const CFG_FILE = DIR + '../group-allowlist.json';
+// 群策略文件：插件里由 GROUP_CFG 指过来（家目录），独立跑时退回同目录
+const CFG_FILE = process.env.GROUP_CFG || (DIR + '../group-allowlist.json');
 
 export const SELF = String(process.env.SELF_QQ ?? '');
 
