@@ -99,7 +99,7 @@ export function apply(ctx, config = {}) {
   tool({
     name: 'qq_status',
     description: '看 QQ 桥状态：OneBot 连上没、账号、好友白名单、群列表、今天用了几条、贴纸几条、Python 依赖有没有。',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    parameters: {},
     async execute() {
       cfg = loadConfig(home)
       const supInfo = sup.info()
@@ -112,7 +112,7 @@ export function apply(ctx, config = {}) {
   tool({
     name: 'qq_verify',
     description: '跑一遍自检（零 token）：进程 / OneBot 连接 / 端口 / 白名单 / 家目录。能修的当场修，输出「n/6 通过」。',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    parameters: {},
     async execute() {
       cfg = loadConfig(home)
       const r = await runChecks({
@@ -139,9 +139,7 @@ export function apply(ctx, config = {}) {
       + '常用：{"mode":"auto|draft|off"}、{"onebot":{"url":"ws://127.0.0.1:3001"}}、'
       + '{"llm":{"models":["deepseek-v4.1-flash"]}}、{"media":{"dir":"/路径/media","cqDir":"/容器内路径/media"}}',
     parameters: {
-      type: 'object',
-      properties: { patch: { type: 'object', additionalProperties: true } },
-      additionalProperties: false,
+      patch: { type: 'object', additionalProperties: true },
     },
     async execute({ patch }) {
       cfg = patch ? saveConfig(home, patch) : loadConfig(home)
@@ -156,12 +154,7 @@ export function apply(ctx, config = {}) {
       + '例：{"self":"123456","friends":{"20002000":{"label":"主人","enabled":true}}}、'
       + '{"groups":{"123456789":{"label":"主群","dryRun":false}}}、{"defaults":{"replyProb":0.02}}',
     parameters: {
-      type: 'object',
-      properties: {
-        allow: { type: 'object', additionalProperties: true, description: '改私聊白名单（self / friends）' },
-        group: { type: 'object', additionalProperties: true, description: '改群策略（groups / defaults）' },
-      },
-      additionalProperties: false,
+      allow: { type: 'object', additionalProperties: true, description: '改私聊白名单（self / friends）' },
     },
     async execute({ allow, group }) {
       const out = {}
@@ -176,10 +169,7 @@ export function apply(ctx, config = {}) {
     name: 'qq_send_private',
     description: '用这个 QQ 号给某个好友发一条私聊消息。',
     parameters: {
-      type: 'object',
-      properties: { userId: { type: 'string' }, text: { type: 'string' } },
-      required: ['userId', 'text'],
-      additionalProperties: false,
+      userId: { required: true, type: 'string' },
     },
     async execute({ userId, text }) {
       return await sup.call('send_private', { userId, text }, { timeoutMs: 30000 })
@@ -191,14 +181,7 @@ export function apply(ctx, config = {}) {
     description: '用这个 QQ 号往群里发一条消息。传 dryRun:true 只试不真发。'
       + '⚠️ NapCat 群发常返回 retcode 1200 /「EventChecker Failed」，但消息**其实已经发出去了**，这里会标成「假失败」。',
     parameters: {
-      type: 'object',
-      properties: {
-        groupId: { type: 'string' },
-        text: { type: 'string', description: '文本，或 CQ 码（如 [CQ:image,file=...]）' },
-        dryRun: { type: 'boolean' },
-      },
-      required: ['groupId', 'text'],
-      additionalProperties: false,
+      groupId: { required: true, type: 'string' },
     },
     async execute({ groupId, text, dryRun = false }) {
       return await sup.call('send_group', { groupId, text, dryRun }, { timeoutMs: 40000 })
@@ -208,7 +191,7 @@ export function apply(ctx, config = {}) {
   tool({
     name: 'qq_groups',
     description: '列群策略：每个群的有效配置（继承 defaults 之后的结果）。',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    parameters: {},
     async execute() {
       try { return { ok: true, groups: await sup.call('groups', {}, { timeoutMs: 8000 }) } } catch {
         const g = loadGroupCfg(home)
@@ -221,7 +204,7 @@ export function apply(ctx, config = {}) {
     name: 'qq_qr',
     description: '拿 QQ 登录二维码（NapCat 未登录时才有）。返回 PNG 路径，用 present 推给使用者扫。'
       + '需要先在 qq_config 里配 napcat.qrUrl 或 napcat.webui+token；没配就返回操作步骤。',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    parameters: {},
     async execute() {
       cfg = loadConfig(home)
       const nap = cfg.napcat ?? {}
@@ -264,7 +247,7 @@ export function apply(ctx, config = {}) {
   tool({
     name: 'qq_stickers',
     description: '表情包库现状（条数/目录）。库是空的就说明还没导 —— 导入用命令行：node scripts/import-stickers.mjs',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    parameters: {},
     async execute() {
       const dir = join(home, 'media', 'stickers')
       const idx = join(dir, 'index.json')
@@ -280,14 +263,7 @@ export function apply(ctx, config = {}) {
       + 'style: "sunbar" = 孙吧模式（损、毒、短、反问收尾，决策更爱接话）；"normal" = 正常。'
       + 'intensity: "mid" | "heavy"（heavy 更冲、概率更高）。改完即时生效，不用重启。',
     parameters: {
-      type: 'object',
-      properties: {
-        gid: { type: 'string', description: '群号' },
-        style: { type: 'string', description: 'sunbar | normal（不传=只查）' },
-        intensity: { type: 'string', description: 'mid | heavy，默认 mid' },
-      },
-      required: ['gid'],
-      additionalProperties: false,
+      gid: { required: true, type: 'string', description: '群号' },
     },
     async execute({ gid, style, intensity = 'mid' }) {
       const { readFileSync, writeFileSync, mkdirSync } = await import('node:fs')
@@ -316,7 +292,7 @@ export function apply(ctx, config = {}) {
   tool({
     name: 'qq_restart',
     description: '优雅重启 QQ 桥子进程。',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    parameters: {},
     async execute() {
       const r = await sup.restart('工具请求')
       return { ok: Boolean(r), process: sup.info() }
@@ -327,9 +303,7 @@ export function apply(ctx, config = {}) {
     name: 'qq_log',
     description: '看 QQ 桥日志最后几十行。',
     parameters: {
-      type: 'object',
-      properties: { lines: { type: 'natural' } },
-      additionalProperties: false,
+      lines: { type: 'integer' },
     },
     async execute({ lines = 40 }) {
       return { ok: true, tail: tailLog(home, Math.min(200, Math.max(10, Number(lines) || 40))) }
