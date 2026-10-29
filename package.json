@@ -1,18 +1,50 @@
 {
   "name": "dsh-qq-bridge",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "DSH 插件：接管一个真实 QQ 号（NapCat / OneBot v11）—— 私聊 + 群聊、决策器、点歌、表情包、零 token 自检自愈",
-  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "qq", "onebot", "napcat"],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "qq",
+    "onebot",
+    "napcat"
+  ],
   "license": "MIT",
   "type": "module",
   "main": "index.js",
-  "exports": { ".": "./index.js", "./package.json": "./package.json" },
-  "files": ["index.js", "cordis.patch.yml", "lib", "bridge", "persona", "scripts", "test", "README.md", "AGENTS.md", "SECURITY.md", "LICENSE"],
-  "engines": { "dsh": ">=0.2.0", "node": ">=22" },
-  "peerDependencies": { "@deepseek-ai/dsh-tools": "*", "@deepseek-ai/schemastery": "*" },
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "lib",
+    "bridge",
+    "persona",
+    "scripts",
+    "test",
+    "README.md",
+    "AGENTS.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0",
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-tools": { "optional": true },
-    "@deepseek-ai/schemastery": { "optional": true }
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
@@ -24,5 +56,9 @@
     "test": "node test/run.mjs",
     "sim": "node test/sim-group.mjs"
   },
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
 }
