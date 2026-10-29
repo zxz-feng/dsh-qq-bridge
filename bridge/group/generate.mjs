@@ -218,8 +218,11 @@ export async function generate({ gid, policy = {}, msg, depth = 0, extra = '' })
 
   // ── 工具回合（只跑一跳，避免无限套娃）──
   if (depth === 0) {
+    // 自动读链接只在"这条是冲她来的"时做：点名叫她、回复她，或者整条就是个链接。
+    // 否则群里刷屏的长文里随便一个链接都要抓一次（9 秒超时 + 多一次生成），太亏。
     const autoUrl = extractUrl(msg.text);
-    const reads = parsed.reads.length ? parsed.reads : (autoUrl ? [autoUrl] : []);
+    const worthAuto = autoUrl && (msg.atMe || msg.replyToMe || String(msg.text).trim().length <= 60);
+    const reads = parsed.reads.length ? parsed.reads : (worthAuto ? [autoUrl] : []);
     if (reads.length || parsed.infos.length || parsed.looks.length) {
       const { blocks, pictures, used } = await runTools({
         reads, infos: parsed.infos, looks: parsed.looks,

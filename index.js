@@ -51,6 +51,9 @@ export const Config = !z ? undefined : z.object({
   llmApiKey: z.string().default('').extra('volatile', true),
   llmModels: z.string().default('deepseek-v4.1-flash,hy3').extra('volatile', true),
   selfHealEveryMin: z.natural().max(120).default(5).extra('volatile', true),
+  // 抓网页走的代理：这台机器直连萌娘要 16 秒（fetch 10 秒直接超时），走 mihomo 1.4 秒。
+  // 空着 = 直连；填 http://127.0.0.1:17890 这种就行。
+  webProxy: z.string().default('').extra('volatile', true),
   controlPort: z.natural().max(65535).default(17902).extra('volatile', true),
 })
 
@@ -97,6 +100,9 @@ export function apply(ctx, config = {}) {
     BRIDGE_HOME: home,
     DSH_HOME: process.env.DSH_HOME || '',
     ...(tiebaMcp ? { TIEBA_MCP: tiebaMcp } : {}),
+    // 抓网页的代理：配置页填了就用它，否则沿用环境变量
+    ...((config.webProxy || process.env.WEB_PROXY || process.env.HTTPS_PROXY)
+      ? { WEB_PROXY: config.webProxy || process.env.WEB_PROXY || process.env.HTTPS_PROXY } : {}),
   }
   const sup = new Supervisor({
     script: BRIDGE_SCRIPT,

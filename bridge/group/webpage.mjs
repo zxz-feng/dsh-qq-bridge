@@ -8,7 +8,11 @@
 // 输出一律 {ok, site, title, text, images[], reason}，text 截到 1200 字 ——
 // 塞进提示词的预算是有限的，宁少不滥。
 
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tiebaCall } from './tieba.mjs';
+
+const run = promisify(execFile);
 
 const UA = 'Lynx/2.8.9rel.1 libwww-FM/2.14';
 const MAX_TEXT = 1200;
@@ -88,20 +92,82 @@ function pickImages(html, base) {
   return [...new Set(out)].slice(0, 5);
 }
 
-async function get(url, timeoutMs) {
-  const res = await fetch(url, {
-    headers: { 'User-Agent': UA, 'Accept-Language': 'zh-CN,zh;q=0.9' },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(timeoutMs),
+/**
+ * 为什么用 curl 而不是 fetch（2026-10-29 实测）：
+ * 这台机器直连萌娘百科，opensearch 要 9.8 秒、条目页 16 秒（fetch 10 秒超时直接死）；
+ * 走 mihomo 代理 1.4 秒。node 的 fetch 不吃 HTTP_PROXY，所以网络层交给 curl，
+ * 代理地址从 WEB_PROXY 环境变量来（宿主 config 里的 webProxy 传下来的）。
+ */
+function proxyUrl() { return String(process.env.WEB_PROXY || '').trim(); }
+
+const _cache = new Map();   // url → { at, status, html }   （5 分钟）
+const CACHE_MS = 5 * 60 * 1000;
+
+async function curlText(url, opts = {}) {
+  const hit = _cache.get(url);
+  if (hit && Date.now() - hit.at < CACHE_MS) return { status: hit.status, html: hit.html, cached: true };
+  try {
+    const r = await curlOnce(url, opts);
+    _cache.set(url, { at: Date.now(), ...r });
+    return r;
+  } catch (e) {
+    // 代理偶尔抽风（实测 10 秒超时、重试就通），给它一次机会
+    await new Promise((r) => setTimeout(r, 400));
+    const r = await curlOnce(url, opts);
+    _cache.set(url, { at: Date.now(), ...r });
+    return r;
+  }
+}
+
+async function curlOnce(url, { timeoutMs = 9000, method = 'GET', body = '', headers = {} } = {}) {
+  const sec = Math.max(3, Math.ceil(timeoutMs / 1000));
+  const args = ['-sS', '-L', '--max-time', String(sec), '-A', UA,
+    '-H', 'Accept-Language: zh-CN,zh;q=0.9', '-w', '\n__HTTP__%{http_code}'];
+  const px = proxyUrl();
+  if (px) args.push('-x', px);
+  if (method !== 'GET') args.push('-X', method);
+  if (body) args.push('--data-binary', body);
+  for (const [k, v] of Object.entries(headers)) args.push('-H', `${k}: ${v}`);
+  args.push(url);
+  const { stdout } = await run('curl', args, { maxBuffer: 8 * 1024 * 1024, timeout: (sec + 3) * 1000 });
+  const m = String(stdout).match(/\n__HTTP__(\d{3})$/);
+  const status = m ? Number(m[1]) : 0;
+  const html = m ? String(stdout).slice(0, m.index) : String(stdout);
+  return { status, html };
+}
+
+/** POST JSON（VNDB 的 kana API 要 POST） */
+export async function postJson(url, obj, { timeoutMs = 12000 } = {}) {
+  const r = await curlText(url, {
+    timeoutMs, method: 'POST', body: JSON.stringify(obj),
+    headers: { 'Content-Type': 'application/json' },
   });
-  const html = await res.text();
-  return { status: res.status, html, finalUrl: res.url || url };
+  if (r.status !== 200) return { ok: false, status: r.status, reason: `返回 ${r.status}` };
+  try { return { ok: true, json: JSON.parse(r.html) }; }
+  catch { return { ok: false, status: r.status, reason: '返回的不是 JSON' }; }
+}
+
+async function get(url, timeoutMs) {
+  const r = await curlText(url, { timeoutMs });
+  return { status: r.status, html: r.html, finalUrl: url };
 }
 
 /** 萌娘百科：先 opensearch 找条目，再取正文 */
 async function moegirl(url, q, timeoutMs) {
   let target = url;
   let title = '';
+  // 省一次请求：先当"词条名就是标题"直接取，404 再退回 opensearch。
+  // 实测 opensearch 要 5~6 秒，能省就省（群里等 14 秒太久了）。
+  if (!target && q) {
+    const direct = `https://zh.moegirl.org.cn/${encodeURIComponent(q)}`;
+    try {
+      const d = await get(direct, timeoutMs);
+      if (d.status === 200 && !/条目.*不存在|没有找到/.test(d.html.slice(0, 4000))) {
+        target = direct;
+        title = q;
+      }
+    } catch { /* 直连失败就走 opensearch */ }
+  }
   if (!target && q) {
     const api = `https://zh.moegirl.org.cn/api.php?action=opensearch&search=${encodeURIComponent(q)}&limit=1&format=json`;
     const r = await get(api, timeoutMs);
@@ -112,11 +178,27 @@ async function moegirl(url, q, timeoutMs) {
   }
   const r = await get(target, timeoutMs);
   if (r.status !== 200) return { ok: false, reason: `萌娘百科返回 ${r.status}` };
-  const text = htmlToText(r.html);
-  // 萌娘的信息框是"声优 xxx"这种短行，长度过滤会把它切掉 → 单独捞回来
+
+  // 信息框在表格里，htmlToText 会把「声优」和它的值切成两行、又被短行过滤吃掉，
+  // 所以**从 HTML 原文**抠：找到「声优」往后取 300 字，剥标签。
+  const rawNoTag = decode(String(r.html)
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, '\u0001'))
+    .replace(/[ \t\u00a0]+/g, ' ');
   const info = [];
-  const m = text.match(/(声优|配音|出生|身高|生日|血型)[\s\S]{0,40}/g);
-  if (m) info.push(...m.slice(0, 6));
+  const cvM = rawNoTag.match(/声优[\u0001\s]*([^\u0001]{2,80})/);
+  if (cvM) info.push('声优 ' + cvM[1].replace(/\u0001+/g, ' ').trim().slice(0, 60));
+  for (const k of ['出生', '生日', '身高', '血型']) {
+    const m2 = rawNoTag.match(new RegExp(k + '[\\u0001\\s]*([^\\u0001]{1,40})'));
+    if (m2) info.push(k + ' ' + m2[1].replace(/\u0001+/g, ' ').trim().slice(0, 30));
+  }
+
+  // 正文：丢掉 wiki 维护横幅那类噪音（"致维护人员…""编辑本条目…"）
+  const NOISE = /(维护人员|编辑本条目|条目编辑规则|欢迎来到|不适合未满|本页面|页面可能包含|相关描述|请协助|万物皆可萌|如果您|本条目|最近编辑|谨防破坏|欢迎您来到)/;
+  const text = htmlToText(r.html)
+    .split('\n')
+    .filter((line) => !NOISE.test(line))
+    .join('\n');
   const merged = [info.join(' / '), text].filter(Boolean).join('\n').slice(0, MAX_TEXT);
   return {
     ok: true, site: '萌娘百科', title: title || pickTitle(r.html) || target,

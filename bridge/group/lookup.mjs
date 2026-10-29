@@ -7,7 +7,7 @@
 //   VNDB     galgame 的权威库（开发商、发售日、评分）
 // 中文名 → 萌娘 → 里面的日文名/英文名 → VNDB 二次确认，这样「乌有乡」也能落到 Erewhon。
 
-import { fetchPage } from './webpage.mjs';
+import { fetchPage, postJson } from './webpage.mjs';
 
 const UA = 'Lynx/2.8.9rel.1 libwww-FM/2.14';
 
@@ -16,19 +16,13 @@ export async function vndbSearch(name, { timeoutMs = 9000 } = {}) {
   const q = String(name ?? '').trim();
   if (!q) return { ok: false, reason: '没给名字' };
   try {
-    const res = await fetch('https://api.vndb.org/kana/vn', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filters: ['search', '=', q],
-        fields: 'title,alttitle,released,developers.name,rating,votecount,length_minutes',
-        results: 3,
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) return { ok: false, reason: `VNDB 返回 ${res.status}` };
-    const j = await res.json();
-    const r = j?.results?.[0];
+    const res = await postJson('https://api.vndb.org/kana/vn', {
+      filters: ['search', '=', q],
+      fields: 'title,alttitle,released,developers.name,rating,votecount,length_minutes',
+      results: 3,
+    }, { timeoutMs });
+    if (!res.ok) return { ok: false, reason: `VNDB ${res.reason}` };
+    const r = res.json?.results?.[0];
     if (!r) return { ok: false, reason: `VNDB 上没有「${q}」` };
     return {
       ok: true,
@@ -50,8 +44,12 @@ export function pickCv(text) {
   const s = String(text ?? '');
   const m = s.match(/声优[：:\s]*([^\n]{2,60})/);
   if (!m) return [];
-  // 「声优 夏和小 藤田茜（全年龄版、动画）」—— 括号后面是别的字段，先切掉
-  const raw = m[1].split(/[（(]/)[0];
+  // 信息框会被拼成「声优 夏和小 / 生日 12月1日 / 身高 146cm」——
+  // 先切掉后面的字段，否则生日身高血型全被当成声优（实测踩过）
+  const raw = m[1]
+    .split('/')[0]
+    .split(/(生日|身高|血型|星座|萌点|活动范围|出生|体重|三围)/)[0]
+    .split(/[（(]/)[0];
   return raw
     .split(/[\s、,，/]+/)
     .map((x) => x.replace(/[（(].*?[)）]/g, '').trim())
@@ -68,15 +66,27 @@ export async function lookupInfo(q) {
   const name = String(q ?? '').trim();
   if (!name) return { ok: false, block: '', cv: [] };
 
-  const page = await fetchPage('', { q: name, timeoutMs: 10000 });
+  // 群里等不了太久：整段 18 秒还没完，就用手上已有的东西回答
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, block: `\n【查「${name}」太慢了，没等完】`, cv: [] }), 18000);
+  });
+  try { return await Promise.race([lookupInfoInner(name), deadline]); }
+  finally { clearTimeout(timer); }
+}
+
+async function lookupInfoInner(name) {
+  const page = await fetchPage('', { q: name, timeoutMs: 12000 });
   if (!page.ok) {
     return { ok: false, block: `\n【我去查了「${name}」：没查到 —— ${page.reason ?? '不知道为啥'}】`, cv: [] };
   }
 
   const cv = pickCv(page.text);
-  // 萌娘条目里常写着日文原名，用它去 VNDB 确认是不是 galgame
+  // 萌娘条目里常写着日文原名，用它去 VNDB 确认是不是 galgame。
+  // 已经抠到声优 = 这是个人物条目，VNDB 查人物没意义（kana 的中文搜索也搜不到），
+  // 省掉这一次请求（2~3 秒）。人物页要 CV 已经够了。
   const jp = (String(page.text).match(/（([^）]{2,40})）/) || [])[1] || '';
-  const vn = await vndbSearch(jp || name);
+  const vn = cv.length ? { ok: false, reason: '人物条目，不查 VNDB' } : await vndbSearch(jp || name);
   const lines = [`\n【我查到的「${page.title || name}」（${page.site}）】`, String(page.text).slice(0, 900)];
   if (cv.length) lines.push(`声优：${cv.join('、')}`);
   if (vn.ok) {

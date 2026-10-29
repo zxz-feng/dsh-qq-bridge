@@ -292,12 +292,12 @@ export async function handleGroupMessage(evt, { callApi }) {
 
   if (d.speak) {
     await respond({
-      gid, policy, msg: { uin, name, text: displayText, atMe }, evt, callApi, hard: d.hard,
+      gid, policy, msg: { uin, name, text: displayText, atMe, replyToMe }, evt, callApi, hard: d.hard,
     });
     return;
   }
   if (d.deferSec) {
-    scheduleDeferred(gid, { uin, name, text: displayText, atMe }, d.deferSec, policy, callApi, evt, d.hard);
+    scheduleDeferred(gid, { uin, name, text: displayText, atMe, replyToMe }, d.deferSec, policy, callApi, evt, d.hard);
   }
 }
 
