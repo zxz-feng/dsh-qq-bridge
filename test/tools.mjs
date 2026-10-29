@@ -69,6 +69,12 @@ t('pageBlock 成功时带站点与正文', () => {
 });
 
 // ── 标记解析 ──
+t('pickHint 认得出语境（乌有乡那条的教训）', () => {
+  assert.equal(gen.pickHint('这乌有乡也太变态了', '有汉化版吗'), 'galgame');
+  assert.equal(gen.pickHint('新番出了吗', '这个番好看'), '动画');
+  assert.equal(gen.pickHint('今天天气不错'), '');
+});
+
 t('parseReply 吃掉 read/info/look/tieba 四个标记', () => {
   const r = gen.parseReply('看看[[read:https://a.com]]|||这个[[look:结城希亚]]|||[[info:乌有乡]]|||[[tieba:乌有乡 攻略]]');
   assert.deepEqual(r.tiebas, ['乌有乡 攻略']);

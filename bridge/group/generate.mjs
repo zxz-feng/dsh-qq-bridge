@@ -69,7 +69,29 @@ export function parseReply(raw, { maxParts = 2 } = {}) {
  * 执行模型自己发起的工具请求（最多两个，宁少不滥）
  * @returns {Promise<{blocks:string[], pictures:object[], used:string[]}>}
  */
-async function runTools({ reads, infos, looks, tiebas = [] }) {
+
+/**
+ * 从上下文里认语境，给贴吧搜索当消歧词（2026-10-29 用户点名的问题）：
+ * 群里聊「乌有乡」明显是黄油，光搜两个字搜回来一堆《幽灵行动断点》的地图帖。
+ * 所以搜之前先看看上下文在聊什么门类，把词带上。
+ */
+const HINT_RULES = [
+  [/\b(galgame|gal|eroge|avg|adv|视觉小说|文字冒险)\b/i, 'galgame'],
+  [/(黄油|拔作|r18|18禁|hgame|h game|色情|涩涩|cg包|汉化|生肉|熟肉|立绘|cg|拔作|重口|纯爱|ntr|钟表社|clockup)/i, 'galgame'],
+  [/(里番|番剧|动画|新番|番名|ova)/i, '动画'],
+  [/(轻小说|小说|文库|web文)/i, '轻小说'],
+  [/(单机|主机|ps5|switch|steam|游戏|手游|抽卡|二游)/i, '游戏'],
+  [/(漫画|条漫|本子|同人志)/i, '漫画'],
+  [/(表情包|梗图|头像|壁纸)/i, '表情包'],
+];
+
+export function pickHint(...texts) {
+  const all = texts.filter(Boolean).join(' ');
+  for (const [re, tag] of HINT_RULES) if (re.test(all)) return tag;
+  return '';
+}
+
+async function runTools({ reads, infos, looks, tiebas = [], hint = '' }) {
   const blocks = [];
   const pictures = [];
   const used = [];
@@ -92,6 +114,9 @@ async function runTools({ reads, infos, looks, tiebas = [] }) {
     const r = cvOnly ? await lookupCv(q.replace(/(的)?(cv|声优|配音)/gi, '').trim() || q) : await lookupInfo(q);
     blocks.push(r.block || `\n【查「${q}」没查到】`);
     used.push('info:' + q.slice(0, 30));
+    // 查资料的结果本身就是最好的语境：萌娘/VNDB 说这是 galgame，
+    // 那后面搜贴吧就带上这个词，不用等上下文里有人提「黄油」。
+    if (!hint && /galgame|エロ|エレホン|视觉小说|18禁|eroge/i.test(String(r.block || ''))) hint = 'galgame';
     console.log(`  [tool] 查了「${q}」${r.ok ? '' : '（没查到）'}`);
   }
 
@@ -99,12 +124,31 @@ async function runTools({ reads, infos, looks, tiebas = [] }) {
     if (budget <= 0) break;
     budget -= 1;
     const r = await searchPosts(q);
-    if (r.ok && r.items.length) {
-      const lines = r.items.slice(0, 6).map((x, i) =>
+    let items = r.ok ? r.items : [];
+    let query = q;
+
+    // 语境消歧：搜「乌有乡」会撞上《幽灵行动断点》的地图帖，带上「galgame」才对。
+    if (items.length && hint) {
+      const hit = items.filter((x) => new RegExp(hint, 'i').test(`${x.title} ${x.forum} ${x.content}`));
+      if (hit.length < 2) {
+        const r2 = await searchPosts(`${q} ${hint}`);
+        if (r2.ok && r2.items.length) {
+          const seen = new Set(items.map((x) => x.tid));
+          items = [...hit, ...r2.items.filter((x) => !seen.has(x.tid)), ...items];
+          query = `${q} ${hint}`;
+          console.log(`  [tool] 贴吧语境补搜「${query}」→ ${r2.items.length} 条`);
+        }
+      } else {
+        items = [...hit, ...items.filter((x) => !hit.includes(x))];
+      }
+    }
+
+    if (items.length) {
+      const lines = items.slice(0, 6).map((x, i) =>
         `${i + 1}. 《${x.title}》${x.forum ? `（${x.forum}吧）` : ''}${x.content && x.content !== x.title ? `：${x.content.slice(0, 70)}` : ''}`);
-      blocks.push(`\n【我在贴吧搜了「${q}」，找到 ${r.items.length} 条】\n${lines.join('\n')}`);
+      blocks.push(`\n【我在贴吧搜了「${query}」，找到 ${items.length} 条】\n${lines.join('\n')}`);
       used.push('tieba:' + q.slice(0, 30));
-      console.log(`  [tool] 贴吧搜「${q}」→ ${r.items.length} 条`);
+      console.log(`  [tool] 贴吧搜「${query}」→ ${items.length} 条`);
     } else {
       blocks.push(`\n【我在贴吧搜了「${q}」，没搜到】${r.reason ? `（${r.reason}）` : ''}`);
       console.log(`  [tool] 贴吧搜「${q}」没结果：${r.reason || ''}`);
@@ -209,7 +253,8 @@ export async function generate({ gid, policy = {}, msg, depth = 0, extra = '' })
         + '  一轮最多两个标记；标记会被系统吃掉，不要在正文里解释它'
       : '- 材料已经在上面了：用你自己的话回答，**不要再写任何 [[...]] 标记**；查不到就说查不到',
     '- [[tieba:关键词]] 去贴吧搜帖子。想知道「有没有人讨论过 / 网友怎么说 / 攻略 / 这个梗哪来的」，就用它；'
-      + '不用等别人给链接，你自己搜。',
+      + '不用等别人给链接，你自己搜。**关键词要带语境**：群里聊的是黄油，就写「乌有乡 galgame」而不是光写「乌有乡」'
+      + '（光写两个字会搜回来一堆同名游戏地图帖）；聊的是动画就带上「动画」。',
     '- [[pass]] 只能用在"这条根本不是跟你说话"的时候（群里别人互聊、你插不上嘴）。',
     '  被 @、被叫名字、被回复时**绝对不能 pass**，哪怕只是回一句"这个我不干哦"。',
     '- 不想接、被要求做不该做的事（骂人、冒充、发广告）：用一句短话温柔挡回去，不要沉默。',
@@ -247,6 +292,7 @@ export async function generate({ gid, policy = {}, msg, depth = 0, extra = '' })
     if (reads.length || parsed.infos.length || parsed.looks.length || parsed.tiebas.length) {
       const { blocks, pictures, used } = await runTools({
         reads, infos: parsed.infos, looks: parsed.looks, tiebas: parsed.tiebas,
+        hint: pickHint(ctxBlock, msg.text),
       });
       if (blocks.length) {
         const r2 = await generate({ gid, policy, msg, depth: 1, extra: '\n' + blocks.join('\n') });
