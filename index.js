@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadDeps } from './lib/deps.mjs'
 import { Supervisor } from './lib/supervisor.mjs'
+import { startHostApi } from './lib/host-api.mjs'
 import { homeDir, writeJson } from './lib/home.mjs'
 import { runChecks, formatReport, tailLog } from './lib/health.mjs'
 import { normalize, loadConfig, saveConfig, seedFiles, loadAllowlist, saveAllowlist, loadGroupCfg, saveGroupCfg, DEFAULTS } from './bridge/config.mjs'
@@ -72,11 +73,33 @@ export function apply(ctx, config = {}) {
   let cfg = loadConfig(home)
   log(`家目录 ${home}${made.length ? `（首次铺了 ${made.join('、')}）` : ''}`)
 
+  // env 用**同一个对象**交给 Supervisor：它每次 spawn 才展开，所以小门就绪后
+  // 往这里补 HOST_API_URL / HOST_API_TOKEN，桥下次（或首次）拉起就带着门牌。
+  const hostEnv = { BRIDGE_HOME: home, DSH_HOME: process.env.DSH_HOME || '' }
   const sup = new Supervisor({
     script: BRIDGE_SCRIPT,
-    env: { BRIDGE_HOME: home, DSH_HOME: process.env.DSH_HOME || '' },
+    env: hostEnv,
     logFile: join(home, 'bridge.log'),
     log,
+  })
+
+  // 宿主小门：把 ctx.web（联网搜索 / 抓网页）借给桥用。桥是独立进程，拿不到 ctx，
+  // 只能靠这条 127.0.0.1 的带 token 通道。没有搜索 provider 时它照样活着，
+  // 桥会安静地退回自己的抓取 —— 装不装搜索插件都不影响桥能不能跑。
+  let hostApi = null
+  let started = false
+  const startBridgeOnce = (why) => {
+    if (started || !cfg.enabled) return
+    started = true
+    try { sup.start(); log(`桥已拉起（${why}）`) } catch (e) { log(`启动失败：${e?.message ?? e}`) }
+  }
+  void startHostApi({ ctx, log }).then((h) => {
+    hostApi = h
+    if (h.url) {
+      hostEnv.HOST_API_URL = h.url
+      hostEnv.HOST_API_TOKEN = h.token
+    }
+    startBridgeOnce(h.url ? '小门就绪' : '小门起不来，退回自带搜索')
   })
 
   const textOutput = {
@@ -310,11 +333,9 @@ export function apply(ctx, config = {}) {
     },
   })
 
-  if (cfg.enabled) {
-    try { sup.start() } catch (e) { log(`启动失败：${e?.message ?? e}`) }
-  } else {
-    log('配置 enabled=false —— 已装载但不启动')
-  }
+  // 桥的拉起交给 startHostApi().then(...)：先让小门就绪，第一次 spawn 就带上门牌。
+  // 这里只负责「不启动」的那句日志。
+  if (!cfg.enabled) log('配置 enabled=false —— 已装载但不启动')
 
   const everyMin = cfg.selfHeal?.everyMin ?? 5
   if (everyMin > 0) {
@@ -340,6 +361,8 @@ export function apply(ctx, config = {}) {
   }
 
   ctx.effect(() => () => { void sup.stop() }, 'qq-bridge: 收 bridge 子进程')
+  ctx.effect(() => () => { try { hostApi?.close?.() } catch { /* 已经关了 */ } }, 'qq-bridge: 收宿主小门')
+
 
   log(`已挂载（家=${home}，自检每 ${everyMin} 分钟）`)
 }

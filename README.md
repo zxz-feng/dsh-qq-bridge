@@ -148,6 +148,25 @@ DSH 工具：          qq_style { gid, style: "sunbar", intensity: "heavy" }
 | 点歌 / 唱歌 / 整首分段 | 一个装了 `yt-dlp` 的 python + B站登录态（`python.bili` / `python.asr` / `python.cred`）；还要系统里有 `ffmpeg` |
 | B站搜索 | 上面那个 python + `bridge/tools/bili.py` |
 | 表情包识别 | 模型网关（视觉） |
+| 更强的联网搜索 | DSH 里装了搜索插件并配了 key（见下） |
+
+## 联网搜索：四个源，谁有结果算谁的
+
+群里那句「XX 是什么意思」背后跑的是四条并发线路：
+
+| 源 | 靠什么 | 拿不到时 |
+|---|---|---|
+| **宿主搜索** | 借 DSH 自己的 `ctx.web`（装了搜索插件、配了 key 才有） | 静默跳过 |
+| **DDG lite** | `lite.duckduckgo.com` + Lynx UA，免 key | 静默跳过 |
+| **B站** | `tools/bili.py` + B站登录态 | 静默跳过 |
+| **维基百科** | 官方 API，免 key | 静默跳过 |
+
+桥是**独立子进程**，拿不到 DSH 的 `ctx`。所以宿主进程开了一个只绑 `127.0.0.1`、
+带随机 token 的小门（`lib/host-api.mjs`），把地址经 `HOST_API_URL` / `HOST_API_TOKEN`
+交给桥（`bridge/group/hostsearch.mjs` 是桥这边的客户端）。
+
+**没有搜索插件也能跑** —— 小门会老实回 `NO_PROVIDER`，桥退回 DDG lite + B站 + 维基。
+反过来，光装搜索插件、不接这条通道，桥也用不上它。
 
 ## 自检（零 token）
 
@@ -163,12 +182,15 @@ node scripts/verify.mjs [--fix]
 ```
 index.js            宿主半：托管子进程 + 工具 + 周期自检
 lib/                deps / home / supervisor / health / protocol（跨插件复用）
+lib/host-api.mjs    宿主小门：把 ctx.web 借给子进程（可选，起不来不影响桥）
 bridge/
   main.mjs          主循环：OneBot WS → 私聊 / 群聊分发
   config.mjs        配置钳位 + 三份文件的读写
   persona-core.mjs  人设组装（分层发送）
   group/            ★ 群聊那套（决策器、点歌、语音、表情包、命令层、成员档案）
     goods.mjs       找资源 + 缩略图（DLsite → og:image → 发图）
+    hostsearch.mjs  找宿主借联网搜索（127.0.0.1 小门，可选）
+    search.mjs      四源并发：宿主 / DDG lite / B站 / 维基
     style.mjs       风格档（孙吧模式）读写 + 提示词注入 + 决策偏置
     style-sunbar.txt  孙吧模式的具体说明（纯文本，可改）
   tools/bili.py     B站搜索/热词（Python）

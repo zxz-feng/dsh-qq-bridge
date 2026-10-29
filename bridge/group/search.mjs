@@ -1,24 +1,25 @@
 /**
  * 搜梗 / 查资料
  *
- * ⚠️ 实测结论（2026-10-27）：这台机器能用的搜索源很有限
- *   ✅ B站搜索       —— 中文网络梗最好的来源（标题+简介+评论就是解释）
- *   ✅ B站热词       —— 每天拉一次，缓存本地
- *   ✅ 维基百科 API  —— 通用知识、人物、事件
- *   ❌ DuckDuckGo    —— 202 反爬（anomaly-modal）
- *   ❌ Bing HTML     —— 返回 JS 空壳；Bing RSS 返回不相干内容
- *   ❌ 百度/360/搜狗 —— 安全验证 / JS challenge
- *   ❌ Google        —— JS 空壳
- *   ❌ SearXNG 公共实例 —— 浏览器验证 / 429
+ * 四个源，并发跑，谁有结果算谁的：
+ *   ✅ 宿主搜索   —— 借 DSH 的 `ctx.web`（要装了搜索插件并配了 key 才有）。
+ *                    走 `hostsearch.mjs` → 父进程 127.0.0.1 小门。有它就不用 DDG。
+ *   ✅ DDG lite   —— `lite.duckduckgo.com/lite/` + Lynx UA。中文结果最好的一路，
+ *                    2026-10-29 实测稳定（html 版经常 202，lite 版正常）。
+ *   ✅ B站搜索    —— 中文网络梗最好的来源（标题+简介就是解释）
+ *   ✅ 维基百科   —— 通用知识、人物、事件
  *
- * 所以策略是：**B站为主，维基为辅**，DDG 作为机会性补充（能通就用，不通静默跳过）。
- * 不硬编任何会 404 的源，也不假装搜到了。
+ * ❌ 已放弃：Bing HTML/RSS（中文串味）、百度/360/搜狗（验证码）、Google（JS 空壳）、
+ *            SearXNG 公共实例（429）、Mojeek（200 但无结果）
+ *
+ * 策略：**能拿到就用，拿不到就少说**。不硬编会 404 的源，也不假装搜到了。
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { readJson, writeJson, STORE, todayKey } from './store.mjs';
+import { hostSearch } from './hostsearch.mjs';
 
 const exec = promisify(execFile);
 
@@ -127,11 +128,53 @@ export async function wikiSearch(query, n = 3) {
   } catch { return []; }
 }
 
-// ── Brave 搜索（实测可用，2026-10-28）─────────────────────
+// ── DDG html（备用：lite 版失败时兜底）────────────────────
 //
-// 这是目前唯一"能返回真实网页结果"的免费源。
-// DDG/Bing/百度/搜狗/Google/SearXNG 全被反爬（详见 HANDOVER）。
-// Brave 的 HTML 结构：每条结果是一个 snippet 块，里面 标题 + 域名 + 摘要。
+// 普通 Chrome UA 会被判可疑（202 反爬），Lynx UA 能拿到正常结果页。
+
+// ── DDG lite（2026-10-29 实测：中文结果最好的一路）──────────
+//
+// `lite.duckduckgo.com/lite/` 是给无 JS 浏览器用的极简页，反爬比 html 版松得多：
+// 同一个 Lynx UA，html 版经常 202，lite 版稳定 200 且**中文结果真的对题**
+// （搜「雨爱 司凤」直接给出 B站那支视频）。结构也很朴素：
+//   <a rel="nofollow" href="//duckduckgo.com/l/?uddg=<urlencoded>" class='result-link'>标题</a>
+//   之后跟着 <td class='result-snippet'>摘要</td>
+// 注意 href 在 class **之前**，所以不能用 split(class) 切块 —— 用带 index 的全局匹配。
+
+export async function ddgLite(query, n = 5) {
+  let html;
+  try {
+    html = await curl(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
+      { timeoutMs: 18000, ua: 'Lynx/2.8.9rel.1 libwww-FM/2.14' });
+  } catch { return ddgHtml(query, n); }
+  if (!html || html.length < 1500) return ddgHtml(query, n);
+
+  const re = /<a[^>]*href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/g;
+  const hits = [];
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    hits.push({ url: m[1], title: decodeEntities(m[2]), at: m.index, end: re.lastIndex });
+  }
+  if (!hits.length) return ddgHtml(query, n);
+
+  const out = [];
+  for (let i = 0; i < hits.length && out.length < n; i += 1) {
+    const h = hits[i];
+    if (!h.title || h.title.length < 3) continue;
+    // 摘要必须落在「本条之后、下一条之前」，否则会串到下一条去
+    const span = html.slice(h.end, hits[i + 1]?.at ?? html.length);
+    const sn = span.match(/class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/);
+    let url = h.url;
+    const u = url.match(/uddg=([^&]+)/);
+    if (u) { try { url = decodeURIComponent(u[1]); } catch { /* 保持原样 */ } }
+    if (url.startsWith('//')) url = `https:${url}`;
+    out.push({
+      url,
+      title: h.title.replace(/\s{2,}/g, ' ').trim(),
+      snippet: sn ? decodeEntities(sn[1]).replace(/\s{2,}/g, ' ').trim().slice(0, 240) : '',
+    });
+  }
+  return out.length ? out : ddgHtml(query, n);
+}
 
 export async function ddgHtml(query, n = 5) {
   // ⚠️ 2026-10-28 实测：普通 Chrome UA 会被 DDG 判为可疑（202 anomaly-modal），
@@ -162,9 +205,9 @@ export async function ddgHtml(query, n = 5) {
   return out;
 }
 
-/** 兼容旧名 */
+/** 兼容旧名：走 lite，失败自动退 html */
 export async function ddgSearch(query, n = 4) {
-  return ddgHtml(query, n);
+  return ddgLite(query, n);
 }
 
 // ── 缓存 ────────────────────────────────────────────────
@@ -185,9 +228,10 @@ export async function gather(query, { force = false } = {}) {
     return { ...hit.data, cached: true };
   }
 
-  // 三路并发：Brave（网页/百科/新闻都行）、B站（中文梗）、维基（人物事件）
-  const [web, bili, wiki] = await Promise.all([
-    ddgHtml(query, 5).catch(() => []),
+  // 四路并发：宿主（装了搜索插件才有）、DDG lite（网页）、B站（中文梗）、维基（人物事件）
+  const [host, web, bili, wiki] = await Promise.all([
+    hostSearch(query, 5).catch(() => null),
+    ddgLite(query, 5).catch(() => []),
     biliSearch(query, 4).catch(() => []),
     wikiSearch(query, 2).catch(() => []),
   ]);
@@ -195,7 +239,15 @@ export async function gather(query, { force = false } = {}) {
   const parts = [];
   const sources = [];
 
-  if (web.length) {
+  // 宿主搜索优先（带正文摘要，比 DDG 的「标题+一句摘」强）；拿不到就退回 DDG。
+  // 两者不同时用 —— 同样的东西进两遍上下文，白烧 token。
+  if (host && (host.sources.length || host.answer)) {
+    sources.push('宿主');
+    const lines = [];
+    if (host.answer) lines.push(host.answer);
+    host.sources.slice(0, 5).forEach((w, i) => lines.push(`${i + 1}. ${w.title}\n   ${w.snippet || w.url}`));
+    parts.push('【联网搜索】\n' + lines.join('\n'));
+  } else if (web.length) {
     sources.push('网页');
     parts.push('【网页搜索结果】\n' + web.map((w, i) =>
       `${i + 1}. ${w.title}\n   ${w.snippet}`).join('\n'));

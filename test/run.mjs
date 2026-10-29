@@ -217,6 +217,84 @@ console.log('\n【人设（QQ 群版）】')
   ok('锚定句带身份', groupPersona.ANCHOR.includes('小鲸鱼'))
 }
 
+// ── 宿主小门（桥 → DSH 的唯一上行通道）────────────────
+//
+// 这里测的是「协议」不是「搜索质量」：小门能不能起、token 认不认、没有
+// 搜索 provider 时会不会老实说 NO_PROVIDER、桥那边拿不到会不会安静返回 null。
+{
+  const { startHostApi } = await import('../lib/host-api.mjs')
+
+  const fakeWeb = {
+    async search({ query, maxResults }) {
+      return {
+        sources: Array.from({ length: maxResults }, (_, i) => ({
+          url: `https://example.com/${i}`, title: `标题${i}`, snippet: `摘要${i}`,
+        })),
+        truncated: false,
+      }
+    },
+  }
+
+  // ① 有 provider
+  const api = await startHostApi({ ctx: { get: (k) => (k === 'web' ? fakeWeb : undefined) }, log: () => {} })
+  ok('小门起在 127.0.0.1', /^http:\/\/127\.0\.0\.1:\d+$/.test(api.url), api.url)
+  ok('小门报告 web 可用', api.hasWeb() === true)
+
+  const auth = { 'content-type': 'application/json', authorization: `Bearer ${api.token}` }
+  const ping = await (await fetch(`${api.url}/ping`, { headers: auth })).json()
+  ok('ping 正常', ping.ok === true && ping.data.hasWeb === true)
+
+  const sr = await (await fetch(`${api.url}/search`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ query: '雨爱 司凤', maxResults: 3 }),
+  })).json()
+  ok('search 回结果', sr.ok === true && sr.data.sources.length === 3)
+  ok('search 字段齐全', sr.data.sources[0].url.startsWith('https://') && sr.data.sources[0].title === '标题0')
+
+  const bad = await fetch(`${api.url}/search`, {
+    method: 'POST', headers: { authorization: 'Bearer wrong-token' }, body: '{}',
+  })
+  ok('token 不对 → 401', bad.status === 401)
+
+  const empty = await (await fetch(`${api.url}/search`, {
+    method: 'POST', headers: auth, body: JSON.stringify({ query: '  ' }),
+  })).json()
+  ok('空 query → 400', empty.ok === false)
+
+  // ② 桥那边：连真小门能拿到
+  process.env.HOST_API_URL = api.url
+  process.env.HOST_API_TOKEN = api.token
+  const { hostSearch, hostAvailable } = await import('../bridge/group/hostsearch.mjs')
+  ok('桥认得小门', hostAvailable() === true)
+  const got = await hostSearch('随便搜搜', 2)
+  ok('桥拿到搜索结果', Boolean(got) && got.sources.length === 2)
+  ok('桥拿到 answer 字段（没有就是空串）', typeof got.answer === 'string')
+
+  // ③ 宿主没装搜索 provider：老实说没有，桥返回 null 而不是抛错
+  const api2 = await startHostApi({ ctx: { get: () => undefined }, log: () => {} })
+  ok('没 provider 时小门照样起', Boolean(api2.url))
+  ok('没 provider 时 hasWeb=false', api2.hasWeb() === false)
+  const np = await (await fetch(`${api2.url}/search`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${api2.token}` },
+    body: JSON.stringify({ query: 'x' }),
+  })).json()
+  ok('没 provider → NO_PROVIDER', np.ok === false && np.code === 'NO_PROVIDER')
+
+  // ④ 搜索抛错（比如没配 key）也不能让桥炸
+  const api3 = await startHostApi({
+    ctx: { get: () => ({ async search() { const e = new Error('没 key'); e.code = 'CREDENTIAL_MISSING'; throw e } }) },
+    log: () => {},
+  })
+  const cf = await (await fetch(`${api3.url}/search`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${api3.token}` },
+    body: JSON.stringify({ query: 'x' }),
+  })).json()
+  ok('没 key → NO_CREDENTIAL（不是 500）', cf.ok === false && cf.code === 'NO_CREDENTIAL')
+
+  api.close(); api2.close(); api3.close()
+}
+
 // ── 汇总 ──────────────────────────────────────────────
 console.log(`\n=== ${pass} 通过 / ${fail} 失败 ===`)
 if (fail) { console.log(`失败项：${failures.join('、')}`); process.exit(1) }

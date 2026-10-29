@@ -1,6 +1,6 @@
 {
   "name": "dsh-qq-bridge",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "DSH 插件：接管一个真实 QQ 号（NapCat / OneBot v11）—— 私聊 + 群聊、决策器、点歌、表情包、零 token 自检自愈",
   "keywords": [
     "dsh",
