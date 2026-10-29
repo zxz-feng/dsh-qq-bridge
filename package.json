@@ -1,7 +1,7 @@
 {
   "name": "dsh-qq-bridge",
-  "version": "0.3.0",
-  "description": "DSH 插件：接管一个真实 QQ 号（NapCat / OneBot v11）—— 私聊 + 群聊、决策器、点歌、表情包、零 token 自检自愈",
+  "version": "0.4.0",
+  "description": "DSH 插件：接管一个真实 QQ 号（NapCat / OneBot v11）—— 私聊 + 群聊、决策器、点歌、表情包、零 token 自检自愈，带设置页",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -15,10 +15,12 @@
   "main": "index.js",
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
+    "client.js",
     "cordis.patch.yml",
     "lib",
     "bridge",
@@ -53,12 +55,20 @@
   },
   "scripts": {
     "verify": "node scripts/verify.mjs",
-    "test": "node test/run.mjs",
+    "test": "node test/run.mjs && node test/api.mjs && node test/client.mjs",
     "sim": "node test/sim-group.mjs"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
     }
   }
 }

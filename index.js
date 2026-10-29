@@ -2,34 +2,39 @@
  * dsh-qq-bridge —— 宿主半端
  * ============================================================================
  * 让 DSH 接管**一个真实 QQ 号**（真人号，NapCat 扫码登录 → OneBot v11）。
- * 插件本身不碰 QQ 协议，只做四件事：
+ * 插件本身不碰 QQ 协议，只做五件事：
  *   1. 托管 bridge 子进程（拉起、退避重启、优雅收摊）
  *   2. 注册工具：qq_status / qq_send_group / qq_config / qq_qr / qq_verify …
  *   3. 每 5 分钟零 token 自检（进程 / OneBot 端口 / 白名单 / 家目录）
- *   4. 卸载时收掉子进程
+ *   4. 给「设置 → QQ 小鲸鱼」那一页开一组 /api/qq-bridge/* 路由
+ *   5. 卸载时收掉子进程
  *
  * ⚠️ **NapCat 是外部依赖**，不在插件里：得自己装（Docker 镜像或桌面版）。
  *    插件只按 OneBot v11 说话 —— 这样插件跟平台无关，换电脑也能用。
+ *
+ * 🔴 一份真相：工具和 HTTP 路由**都调 lib/api.mjs**，谁都不许自己写盘。
  * ============================================================================
  */
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadDeps } from './lib/deps.mjs'
 import { Supervisor } from './lib/supervisor.mjs'
 import { startHostApi } from './lib/host-api.mjs'
-import { homeDir, writeJson } from './lib/home.mjs'
-import { runChecks, formatReport, tailLog } from './lib/health.mjs'
-import { normalize, loadConfig, saveConfig, seedFiles, loadAllowlist, saveAllowlist, loadGroupCfg, saveGroupCfg, DEFAULTS } from './bridge/config.mjs'
+import { homeDir } from './lib/home.mjs'
+import { makeApi } from './lib/api.mjs'
+import { sendJson, sendBinary, readBody, sameOriginOk, maskConfig } from './lib/http.mjs'
+import { normalize, loadConfig, saveAllowlist, saveGroupCfg, loadAllowlist, loadGroupCfg, DEFAULTS, seedFiles } from './bridge/config.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BRIDGE_SCRIPT = join(HERE, 'bridge', 'main.mjs')
 const PLUGIN_ID = 'qq-bridge'
+const API_PREFIX = '/api/qq-bridge'
 
 const { z, defineTool, notes } = await loadDeps()
 
 export const name = PLUGIN_ID
-export const inject = ['tools', 'settings']
+export const inject = ['tools', 'settings', 'webServer']
 
 export const Config = !z ? undefined : z.object({
   enabled: z.boolean().default(true).extra('volatile', true),
@@ -83,6 +88,8 @@ export function apply(ctx, config = {}) {
     log,
   })
 
+  const api = makeApi({ ctx, home, sup, log })
+
   // 宿主小门：把 ctx.web（联网搜索 / 抓网页）借给桥用。桥是独立进程，拿不到 ctx，
   // 只能靠这条 127.0.0.1 的带 token 通道。没有搜索 provider 时它照样活着，
   // 桥会安静地退回自己的抓取 —— 装不装搜索插件都不影响桥能不能跑。
@@ -101,6 +108,8 @@ export function apply(ctx, config = {}) {
     }
     startBridgeOnce(h.url ? '小门就绪' : '小门起不来，退回自带搜索')
   })
+
+  /* ─────────────── 工具（薄壳） ─────────────── */
 
   const textOutput = {
     schema: { type: 'object', properties: {}, additionalProperties: true },
@@ -125,10 +134,7 @@ export function apply(ctx, config = {}) {
     parameters: {},
     async execute() {
       cfg = loadConfig(home)
-      const supInfo = sup.info()
-      let bridge = null
-      try { bridge = await sup.call('status', {}, { timeoutMs: 8000 }) } catch (e) { bridge = { error: String(e?.message ?? e) } }
-      return { ok: true, enabled: cfg.enabled, process: supInfo, bridge, config: cfg, home }
+      return await api.status()
     },
   })
 
@@ -138,21 +144,7 @@ export function apply(ctx, config = {}) {
     parameters: {},
     async execute() {
       cfg = loadConfig(home)
-      const r = await runChecks({
-        client: {
-          info: () => sup.info(),
-          call: (a, p, o) => sup.call(a, p, o),
-          start: () => { sup.state = 'idle'; return sup.start() },
-          restart: (why) => sup.restart(why),
-        },
-        home,
-        cfg: { ...cfg, socksUrl: '' },
-        fix: true,
-        platform: 'qq',
-        // QQ 侧把「代理端口」换成「OneBot 端口」
-        probe: { host: new URL(cfg.onebot.url.replace(/^ws/, 'http')).hostname, port: Number(new URL(cfg.onebot.url.replace(/^ws/, 'http')).port || 80) },
-      })
-      return { ok: r.passed === r.total, report: formatReport(r, { name: 'QQ 桥' }), ...r }
+      return await api.verify()
     },
   })
 
@@ -165,9 +157,9 @@ export function apply(ctx, config = {}) {
       patch: { type: 'object', additionalProperties: true },
     },
     async execute({ patch }) {
-      cfg = patch ? saveConfig(home, patch) : loadConfig(home)
-      try { await sup.call('config', { patch: patch ?? null }, { timeoutMs: 8000 }) } catch { /* 子进程没跑 */ }
-      return { ok: true, config: cfg }
+      const r = patch ? await api.writeConfig(patch) : { ok: true, config: api.readConfig() }
+      cfg = r.config ?? loadConfig(home)
+      return r
     },
   })
 
@@ -216,10 +208,12 @@ export function apply(ctx, config = {}) {
     description: '列群策略：每个群的有效配置（继承 defaults 之后的结果）。',
     parameters: {},
     async execute() {
-      try { return { ok: true, groups: await sup.call('groups', {}, { timeoutMs: 8000 }) } } catch {
+      const r = await api.listGroups()
+      if (!r.groups?.length) {
         const g = loadGroupCfg(home)
         return { ok: true, groups: Object.entries(g.groups ?? {}).map(([gid, v]) => ({ gid, ...v })) }
       }
+      return { ok: true, groups: r.groups }
     },
   })
 
@@ -228,43 +222,7 @@ export function apply(ctx, config = {}) {
     description: '拿 QQ 登录二维码（NapCat 未登录时才有）。返回 PNG 路径，用 present 推给使用者扫。'
       + '需要先在 qq_config 里配 napcat.qrUrl 或 napcat.webui+token；没配就返回操作步骤。',
     parameters: {},
-    async execute() {
-      cfg = loadConfig(home)
-      const nap = cfg.napcat ?? {}
-      const out = join(home, 'qrcode.png')
-      const tries = []
-      if (nap.qrUrl) tries.push(nap.qrUrl)
-      if (nap.webui) {
-        const base = String(nap.webui).replace(/\/$/, '')
-        tries.push(`${base}/api/QQLogin/GetQQLoginQrcode${nap.token ? `?token=${encodeURIComponent(nap.token)}` : ''}`)
-      }
-      for (const url of tries) {
-        try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
-          const ct = res.headers.get('content-type') ?? ''
-          if (ct.includes('image')) {
-            const buf = Buffer.from(await res.arrayBuffer())
-            if (buf.length > 1000) { writeFileSync(out, buf); return { ok: true, path: out, bytes: buf.length } }
-          }
-          const j = await res.json().catch(() => null)
-          const b64 = j?.data?.qrcode ?? j?.qrcode ?? j?.data?.base64
-          if (typeof b64 === 'string' && b64.length > 1000) {
-            const buf = Buffer.from(b64.replace(/^data:image\/\w+;base64,/, ''), 'base64')
-            writeFileSync(out, buf)
-            return { ok: true, path: out, bytes: buf.length }
-          }
-          return { ok: false, url, hint: '接口通了但没拿到图，可能已经登录了，或者字段名不一样', raw: JSON.stringify(j).slice(0, 300) }
-        } catch (e) {
-          log(`取二维码失败（${url}）：${e?.message ?? e}`)
-        }
-      }
-      return {
-        ok: false,
-        hint: '没配二维码来源。三条路：① 打开 NapCat 的 WebUI 自己扫码；'
-          + '② 把 WebUI 里二维码图片的直链填进 qq_config 的 napcat.qrUrl；'
-          + '③ 桌面版 NapCat 会直接弹窗。扫完用 qq_verify 确认 OneBot 通了。',
-      }
-    },
+    async execute() { return await api.qr() },
   })
 
   tool({
@@ -275,7 +233,7 @@ export function apply(ctx, config = {}) {
       const dir = join(home, 'media', 'stickers')
       const idx = join(dir, 'index.json')
       let n = 0
-      try { n = Object.keys(JSON.parse((await import('node:fs')).readFileSync(idx, 'utf8'))).length } catch { n = 0 }
+      try { n = Object.keys(JSON.parse(readFileSync(idx, 'utf8'))).length } catch { n = 0 }
       return { ok: true, count: n, dir, hint: n ? '' : `还没导表情包：node scripts/import-stickers.mjs --from <图片目录>` }
     },
   })
@@ -291,7 +249,7 @@ export function apply(ctx, config = {}) {
     },
     async execute({ gid, style, intensity = 'mid' }) {
       // 校验和写盘都在桥里（一份真相），这里只转发
-      return await sup.call('style', { gid, style, intensity }, { timeoutMs: 8000 })
+      return style ? await api.setStyle(gid, style, intensity) : await api.readStyle(gid)
     },
   })
 
@@ -299,10 +257,7 @@ export function apply(ctx, config = {}) {
     name: 'qq_restart',
     description: '优雅重启 QQ 桥子进程。',
     parameters: {},
-    async execute() {
-      const r = await sup.restart('工具请求')
-      return { ok: Boolean(r), process: sup.info() }
-    },
+    async execute() { return await api.restart('工具请求') },
   })
 
   tool({
@@ -312,9 +267,59 @@ export function apply(ctx, config = {}) {
       lines: { type: 'integer' },
     },
     async execute({ lines = 40 }) {
-      return { ok: true, tail: tailLog(home, Math.min(200, Math.max(10, Number(lines) || 40))) }
+      return { ok: true, tail: api.readLog(lines) }
     },
   })
+
+  /* ─────────────── HTTP（设置页用） ─────────────── */
+
+  const route = async (req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1')
+    const path = url.pathname.slice(API_PREFIX.length) || '/'
+    const m = req.method || 'GET'
+    const body = m === 'POST' ? await readBody(req) : {}
+
+    if (m === 'GET' && path === '/status') return sendJson(res, 200, await api.status())
+    if (m === 'GET' && path === '/config') return sendJson(res, 200, { ok: true, config: maskConfig(api.readConfig()), defaults: DEFAULTS })
+    if (m === 'POST' && path === '/config') {
+      const r = await api.writeConfig(body.patch ?? body)
+      return sendJson(res, 200, { ...r, config: maskConfig(r.config ?? {}) })
+    }
+    if (m === 'GET' && path === '/groups') return sendJson(res, 200, await api.listGroups())
+    if (m === 'POST' && path === '/groups') return sendJson(res, 200, await api.writeGroup(body.gid, body.patch ?? body))
+    if (m === 'GET' && path === '/styles') return sendJson(res, 200, await api.styles())
+    if (m === 'POST' && path === '/style') {
+      if (!body.gid || !body.style) return sendJson(res, 400, { ok: false, error: '要 gid 和 style' })
+      return sendJson(res, 200, await api.setStyle(body.gid, body.style, body.intensity))
+    }
+    if (m === 'GET' && path === '/friends') return sendJson(res, 200, { ok: true, ...api.readFriends() })
+    if (m === 'POST' && path === '/friends') return sendJson(res, 200, await api.writeFriend(body))
+    if (m === 'POST' && path === '/verify') return sendJson(res, 200, await api.verify())
+    if (m === 'GET' && path === '/log') return sendJson(res, 200, { ok: true, tail: api.readLog(url.searchParams.get('lines') || 40) })
+    if (m === 'GET' && path === '/qr') {
+      const r = await api.qr()
+      if (r.ok && r.path && existsSync(r.path)) {
+        try { return sendBinary(res, 200, readFileSync(r.path)) } catch { /* 落到下面 */ }
+      }
+      // 已经登录了就没有二维码 —— 给 204，前端据此显示「已登录」
+      if (r.hint && /已经登录|没拿到图/.test(r.hint)) return sendJson(res, 204, { ok: true, loggedIn: true })
+      return sendJson(res, 200, r)
+    }
+    if (m === 'POST' && path === '/restart') return sendJson(res, 200, await api.restart('设置页请求'))
+    return sendJson(res, 404, { ok: false, error: `没有这条路由：${m} ${path}` })
+  }
+
+  try {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'prefix',
+      path: API_PREFIX,
+      handler: async (req, res) => {
+        // 别的网页在你浏览器里也能打 127.0.0.1，所以先判同源
+        if (!sameOriginOk(req)) return sendJson(res, 403, { ok: false, error: '只接受同源请求' })
+        try { await route(req, res) } catch (e) { sendJson(res, 500, { ok: false, error: String(e?.message ?? e).slice(0, 300) }) }
+      },
+    }), 'qq-bridge: /api/qq-bridge 路由')
+  } catch (e) { log(`HTTP 路由没挂上：${e?.message ?? e}`) }
 
   // 桥的拉起交给 startHostApi().then(...)：先让小门就绪，第一次 spawn 就带上门牌。
   // 这里只负责「不启动」的那句日志。
@@ -326,17 +331,7 @@ export function apply(ctx, config = {}) {
       try {
         const cur = loadConfig(home)
         if (!cur.enabled) return
-        await runChecks({
-          client: {
-            info: () => sup.info(),
-            call: (a, p, o) => sup.call(a, p, o),
-            start: () => { sup.state = 'idle'; return sup.start() },
-            restart: (why) => sup.restart(why),
-          },
-          home,
-          cfg: cur,
-          fix: true,
-        })
+        await api.verify()
       } catch (e) { log(`自检异常：${e?.message ?? e}`) }
     }, everyMin * 60 * 1000)
     timer.unref?.()
@@ -346,6 +341,5 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => () => { void sup.stop() }, 'qq-bridge: 收 bridge 子进程')
   ctx.effect(() => () => { try { hostApi?.close?.() } catch { /* 已经关了 */ } }, 'qq-bridge: 收宿主小门')
 
-
-  log(`已挂载（家=${home}，自检每 ${everyMin} 分钟）`)
+  log(`已挂载（家=${home}，自检每 ${everyMin} 分钟，设置页 ${API_PREFIX}）`)
 }

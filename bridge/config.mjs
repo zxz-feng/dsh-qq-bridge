@@ -199,9 +199,21 @@ export function loadGroupCfg(home) {
 
 export function saveGroupCfg(home, patch = {}) {
   const cur = loadGroupCfg(home)
+  // ⚠️ 每个群要**逐字段合并**，不能整块替换：设置页是「只发改动的那几项」，
+  //    整块替换会把上一次改的 label / replyProb 一起冲掉（2026-10-29 踩到）。
+  const mergedGroups = { ...(cur.groups ?? {}) }
+  for (const [gid, v] of Object.entries(patch.groups ?? {})) {
+    if (!v || typeof v !== 'object') continue
+    const prev = mergedGroups[gid] ?? {}
+    mergedGroups[gid] = {
+      ...prev,
+      ...v,
+      ...(prev.admin || v.admin ? { admin: { ...(prev.admin ?? {}), ...(v.admin ?? {}) } } : {}),
+    }
+  }
   const next = {
     ...cur,
-    ...(patch.groups ? { groups: { ...(cur.groups ?? {}), ...patch.groups } } : {}),
+    ...(patch.groups ? { groups: mergedGroups } : {}),
     ...(patch.defaults ? { defaults: { ...(cur.defaults ?? {}), ...patch.defaults } } : {}),
     ...(patch.replaceGroups ? { groups: patch.replaceGroups } : {}),
   }

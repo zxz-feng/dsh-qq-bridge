@@ -292,7 +292,15 @@ const actions = {
 
   // 说话风格档：切/查/列。校验放在桥里，宿主工具只转发（一份真相）
   async style({ gid, style, intensity } = {}) {
-    if (!gid) throw new Error('style 需要 gid')
+    // 不传 gid = 只要风格档清单（设置页的下拉框要，免得宿主那边再抄一份解析器）
+    if (!gid) {
+      return {
+        ok: true,
+        available: listStyles().map((x) => ({
+          id: x.id, name: x.name, aliases: x.aliases, short: x.short, bias: x.bias,
+        })),
+      }
+    }
     const id = String(gid)
     if (!style) {
       return { ok: true, gid: id, ...getStyle(id), available: listStyles().map((x) => ({ id: x.id, name: x.name, aliases: x.aliases })) }

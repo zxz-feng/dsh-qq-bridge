@@ -14,6 +14,8 @@
 4. `qq_allowlist` 写 `self`（自己的 QQ 号）+ `friends`（谁能找它）—— **不写就谁都不回**
 5. 要进群：`qq_allowlist` 写 `groups`，**先 `dryRun: true` 跑一段**，看它想说什么再改 `false`
 6. `qq_verify` 应该 6/6；不通就看哪一条：「依赖」= OneBot 端口不通
+7. 告诉他**还有个设置页**：重启 dsh 后 `设置 → QQ 小鲸鱼`（web 平台才有）。上面那几步
+   （白名单、群、风格、模型）都能在那儿点，改完保存即时生效，不用再敲工具
 
 ## 必须提前说清的四件事
 
@@ -42,6 +44,7 @@
 ## 自检/自愈是零 token 的
 
 `qq_verify` 和每 5 分钟的自动自检只查进程、TCP、白名单、家目录，**不调模型**。
+仓库自带 `npm test`（桥 124 + 接口 56 + 设置页 31 条断言，全离线），改完代码先跑它。
 诊断别去调 `qq_send_group` 试（那会真发到群里）。
 
 ## 常见故障
@@ -53,6 +56,8 @@
 | 说了但没发出去 | 日志里 `发送失败` 后面是不是 `retcode 1200`（假失败）；`mode` 是不是 `off` |
 | 点歌没声 | 没配 `python.asr`（装 yt-dlp 的那个 python）或没有 `ffmpeg` |
 | 表情包不发 | 库是空的（`qq_stickers` 看 count），`scripts/import-stickers.mjs --from <目录>` |
+| 设置页整块空白 | 浏览器控制台有报错；多半是 `client.js` 没被引用（`package.json` 的 `exports["./client"]` + `dsh.client`），或宿主半没重启 |
+| 设置页改了没生效 | 桥没在跑（看「现在什么状态」）→ 点「重启桥」；或改的是 `defaults` 而群里有覆盖项 |
 | 二维码拿不到 | `qq_qr` 需要 `qq_config` 里配 `napcat.qrUrl` 或 `napcat.webui`+`token`；否则让他直接在 NapCat WebUI 扫 |
 
 ## 别做的事

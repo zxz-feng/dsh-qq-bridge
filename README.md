@@ -81,6 +81,25 @@ qq_config { "llm": { "models": ["deepseek-v4.1-flash", "hy3"] } }
 | `qq_stickers` | 表情包库现状 |
 | `qq_restart` / `qq_log` | 重启 / 看日志 |
 
+## 设置页（在 Web GUI 里点，不用敲工具）
+
+装好插件、重启 DSH 之后：**设置 → QQ 小鲸鱼**（跟「刷B站」并排，排在它后面）。
+
+| 分区 | 能改什么 |
+|---|---|
+| 现在什么状态 | 进程 / OneBot / 账号 / 今天几条 / 贴纸数 / 家目录（只读，每 10 秒自己刷） |
+| 连接 | 总开关 `enabled`、OneBot 地址与 token、模式 `auto/draft/off`、模型链、NapCat WebUI、扫码登录 |
+| 群 | 一群一卡：启用 / 真发·演练 / 风格档 + 强度 / 接话概率 / 冷场概率 / 每天几条 / 冷却 / 免打扰 / 语音与整歌上限 / 群主 QQ / 静音谁 / 认自己叫什么 —— **留空的项继承 `defaults`** |
+| 说话风格 | 每档一句话说明 + 现在哪档生效（数据来自 `persona/styles/*.md` 的 front-matter） |
+| 私聊白名单 | 谁能让机器人回私聊（加 / 删 / 停用，可标「主人」） |
+| 运维 | 跑自检 / 看日志 / 重启桥 / 刷新二维码 |
+
+改完点保存 → **下一句群消息就按新配置走**，不用重启。宿主那半边只做三件事：读写那几份
+JSON、把切风格交给桥的 `main.mjs style` 子命令、把 `qq_verify` / `qq_log` 的输出原样转回来。
+
+> 服务只绑 `127.0.0.1`，每个路由都过同源检查；token 返回时打码，原样存回**不会**把打码串
+> 写进文件（这条有测试盯着）。
+
 ## 找东西 / 找资源（带缩略图）
 
 群里说「帮我找个黄油 / 找个 galgame / 来张壁纸，要缩略图」——**谁都能让她找**（跟点歌一样，
@@ -235,8 +254,11 @@ node scripts/verify.mjs [--fix]
 ## 结构
 
 ```
-index.js            宿主半：托管子进程 + 工具 + 周期自检
+index.js            宿主半：托管子进程 + 工具 + 周期自检 + 设置页路由
+client.js           浏览器半：设置页那一栏（自注册 __ModuleLoader__，只认 react）
 lib/                deps / home / supervisor / health / protocol（跨插件复用）
+lib/api.mjs         设置页的 HTTP 接口（13 条路由，读写 JSON / 转 qq_verify / 切风格）
+lib/http.mjs        小工具：sendJson / readBody / sameOriginOk / mask
 lib/host-api.mjs    宿主小门：把 ctx.web 借给子进程（可选，起不来不影响桥）
 bridge/
   main.mjs          主循环：OneBot WS → 私聊 / 群聊分发
@@ -250,7 +272,7 @@ bridge/
   persona/styles/    ★ 风格档（一个 .md 一档，丢文件就多一档）
     normal.md sunbar.md tsundere.md cold.md genki.md
   tools/bili.py     B站搜索/热词（Python）
-test/               零 token 离线测试 + 回放脚本
+test/               零 token 离线测试：run（桥）/ api（接口真 HTTP）/ client（假 React 渲染）/ 回放
 scripts/            verify / import-stickers / style（命令行切档）
 ```
 
@@ -259,7 +281,8 @@ scripts/            verify / import-stickers / style（命令行切档）
 - NapCat 掉线要人工扫码 —— 插件只能报告「OneBot 不通」，替不了扫码。
 - 语音要外部 python + ffmpeg，没装就自动关掉点歌那块（其余照常）。
 - 表情包库是空的时不会发图；导入见 `node scripts/import-stickers.mjs --from <目录>`。
-- 没写设置页 UI（v0.1）：配置走 `qq_config` / `qq_allowlist`。
+- 设置页只有 web 平台这一份；Telegram 插件还没做同样的页（只能走工具）。
+- 设置页改的是「文件 + 桥」，**改不到 NapCat 自己**（掉线还是得扫码）。
 - **群发返回 `retcode 1200 / EventChecker Failed` 不代表失败**，消息其实发出去了；
   插件会标成「假失败」。
 

@@ -66,6 +66,14 @@ console.log('\n【配置】')
   const g = saveGroupCfg(HOME, { groups: { '123456789': { label: '主群', dryRun: false } } })
   ok('群策略能写', g.groups['123456789'].label === '主群')
 
+  // 逐字段合并（设置页只发改动项；整块替换会把上次的改动冲掉）
+  saveGroupCfg(HOME, { groups: { '123456789': { replyProb: 0.5 } } })
+  const g2 = saveGroupCfg(HOME, { groups: { '123456789': { dailyActive: 7 } } })
+  eq('群策略是逐字段合并，不是整块替换', g2.groups['123456789'], { label: '主群', dryRun: false, replyProb: 0.5, dailyActive: 7 })
+  saveGroupCfg(HOME, { groups: { '123456789': { admin: { muteMaxSec: 120 } } } })
+  const g3 = saveGroupCfg(HOME, { groups: { '123456789': { admin: { mute: false } } } })
+  ok('admin 子对象也是合并（muteMaxSec 没被冲掉）', g3.groups['123456789'].admin.mute === false && g3.groups['123456789'].admin.muteMaxSec === 120)
+
   const env = envFor(loadConfigByFile(), HOME)
   ok('env 里有 STORE_DIR', String(env.STORE_DIR).endsWith('store'))
   ok('env 里模型链是逗号串', env.QQ_MODELS.includes(','))
