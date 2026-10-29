@@ -19,6 +19,7 @@ import { fullPersona, shortPersona, ANCHOR, personaVersion } from './persona.mjs
 import { shouldSearch, extractQuery, gather, hotwords } from './search.mjs';
 import { fetchPage, pageBlock, extractUrl } from './webpage.mjs';
 import { searchPosts } from './tieba.mjs';
+import { searchAll } from './search-all.mjs';
 import { lookupInfo, lookupCv } from './lookup.mjs';
 import { findPicture } from './findpic.mjs';
 
@@ -111,7 +112,10 @@ async function runTools({ reads, infos, looks, tiebas = [], hint = '' }) {
     if (budget <= 0) break;
     budget -= 1;
     const cvOnly = /(cv|声优|配音)/i.test(q) && q.length <= 20;
-    const r = cvOnly ? await lookupCv(q.replace(/(的)?(cv|声优|配音)/gi, '').trim() || q) : await lookupInfo(q);
+    // 不单源：萌娘 + 维基 + 贴吧 + 网页 一起问，谁有结果用谁的（2026-10-29 用户要求）
+    const r = cvOnly
+      ? await lookupCv(q.replace(/(的)?(cv|声优|配音)/gi, '').trim() || q)
+      : await searchAll(q, { hint });
     blocks.push(r.block || `\n【查「${q}」没查到】`);
     used.push('info:' + q.slice(0, 30));
     // 查资料的结果本身就是最好的语境：萌娘/VNDB 说这是 galgame，
