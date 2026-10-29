@@ -19,7 +19,7 @@ import * as store from './store.mjs';
 import * as members from './members.mjs';
 import { record, maybeSummarize } from './context.mjs';
 import { generate } from './generate.mjs';
-import { learn, lookup, download, imageCQ, pickSticker } from './media.mjs';
+import { learn, lookup, download, imageCQ, pickSticker, sendPicture } from './media.mjs';
 import { makeVoice, makeVoiceFull, recordCQ, judgeSong } from './voice.mjs';
 import { styleBias } from './style.mjs';
 import { hotwords, gather } from './search.mjs';
@@ -159,8 +159,23 @@ export async function handleGroupMessage(evt, { callApi }) {
         imageDesc += `\n[${name}发了表情包：${hit.desc}]`;
       } else {
         const r = await learn(buf, { from: uin, hint: img.sticker ? '表情包' : '图片' });
-        if (r) imageDesc += `\n[${name}发了${img.sticker ? '表情包' : '图片'}：${r.desc}]`;
+        if (r) {
+          imageDesc += `\n[${name}发了${img.sticker ? '表情包' : '图片'}：${r.desc}]`;
+          // 记着这条消息的图是什么 —— 之后有人引用它问"这图里是谁"，得答得上来
+          store.rememberMedia(gid, evt.message_id, { desc: r.desc, uin, name, kind: img.sticker ? '表情包' : '图片' });
+        }
       }
+    }
+  }
+
+  // 引用：QQ 只给 [CQ:reply,id=]，被引用的内容不在消息体里。
+  // 自己发过的图、别人刚发过的图我们都记着 —— 直接摆给模型看，别让她装瞎。
+  if (replyMatch) {
+    const qm = store.lookupMedia(gid, replyMatch[1]);
+    if (qm?.desc) {
+      imageDesc += `\n[他引用了这条：${qm.name ?? '某人'}发的${qm.kind ?? '图片'}「${qm.desc}」]`;
+    } else if (store.isMyMessage(gid, replyMatch[1])) {
+      imageDesc += '\n[他引用了小鲸鱼自己发的一条消息]';
     }
   }
 
@@ -351,8 +366,24 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
       else {
         const r = await callApi('send_group_msg', { group_id: Number(gid), message: imageCQ(st.path) });
         const ok = sendOk(r);
+        if (ok) store.rememberMedia(gid, r?.data?.message_id, { desc: st.desc, name: '小鲸鱼', kind: '表情包' });
         console.log(`  [group] 表情包${ok ? '已发' : '发送失败'}: ${st.desc}`);
         if (!ok) console.error('          ', JSON.stringify(r).slice(0, 200));
+      }
+    }
+  }
+
+  // 找来的图（[[look:]] 的结果）：真发出去，别只在嘴上说"找着了"
+  if (out.pictures?.length) {
+    for (const pic of out.pictures.slice(0, 1)) {
+      await sleep(600);
+      if (dry) { console.log(`  [dry-run] 会发图: ${pic.url}`); continue; }
+      const r = await sendPicture(gid, pic.url, callApi);
+      if (r.ok) {
+        store.rememberMedia(gid, r.messageId, { desc: pic.caption || '找来的图', name: '小鲸鱼', kind: '图片' });
+        console.log(`  [group] 图已发（${pic.from}）`);
+      } else {
+        console.log(`  [group] 图没发出去：${r.reason}`);
       }
     }
   }

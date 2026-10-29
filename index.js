@@ -16,6 +16,7 @@
  * ============================================================================
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadDeps } from './lib/deps.mjs'
@@ -80,7 +81,23 @@ export function apply(ctx, config = {}) {
 
   // env 用**同一个对象**交给 Supervisor：它每次 spawn 才展开，所以小门就绪后
   // 往这里补 HOST_API_URL / HOST_API_TOKEN，桥下次（或首次）拉起就带着门牌。
-  const hostEnv = { BRIDGE_HOME: home, DSH_HOME: process.env.DSH_HOME || '' }
+  // 贴吧：把 dsh-tieba-dive 的 MCP 入口路径算好交给桥（桥在 profile 的 node_modules 里
+  // 自己 require 不到同级的兄弟包；exports 只放出了 '.' 和 './package.json'，所以从
+  // package.json 反推目录）。没装这个插件就留空 —— 桥会安静地退回"贴吧读不了"。
+  const tiebaMcp = (() => {
+    try {
+      const req = createRequire(import.meta.url)
+      const pkg = req.resolve('dsh-tieba-dive/package.json')
+      return join(dirname(pkg), 'mcp-server.mjs')
+    } catch { return '' }
+  })()
+  if (tiebaMcp) log(`贴吧 MCP：${tiebaMcp}`)
+
+  const hostEnv = {
+    BRIDGE_HOME: home,
+    DSH_HOME: process.env.DSH_HOME || '',
+    ...(tiebaMcp ? { TIEBA_MCP: tiebaMcp } : {}),
+  }
   const sup = new Supervisor({
     script: BRIDGE_SCRIPT,
     env: hostEnv,

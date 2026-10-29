@@ -172,3 +172,32 @@ export function saidRecently(gid, text, withinSec = 86400) {
   const t = nowSec();
   return loadSpoken(gid).some((x) => x.text === text && t - x.ts < withinSec);
 }
+
+// ── 媒体缓存（图片/表情包的"记忆"，30 分钟）──────────────────────────
+// 为什么需要：有人引用小鲸鱼发的图问"这图里是谁"，
+// 而 QQ 只给一个 [CQ:reply,id=xxx]，**不会把被引用的内容塞进消息体**。
+// 自己发的自己记着、别人发过的也记着，引用时才能答上来（2026-10-29 加）。
+const MEDIA_TTL_SEC = 30 * 60;
+const MEDIA_MAX = 400;
+const _media = new Map();   // `${gid}:${msgId}` → { desc, uin, name, kind, at }
+
+export function rememberMedia(gid, msgId, info = {}) {
+  if (!gid || !msgId) return;
+  const key = `${gid}:${msgId}`;
+  _media.set(key, { at: nowSec(), ...info });
+  if (_media.size > MEDIA_MAX) {
+    const now = nowSec();
+    for (const [k, v] of _media) {
+      if (now - (v.at ?? 0) > MEDIA_TTL_SEC) _media.delete(k);
+    }
+    // 还超就砍最老的（Map 保序）
+    while (_media.size > MEDIA_MAX) _media.delete(_media.keys().next().value);
+  }
+}
+
+export function lookupMedia(gid, msgId) {
+  const v = _media.get(`${gid}:${msgId}`);
+  if (!v) return null;
+  if (nowSec() - (v.at ?? 0) > MEDIA_TTL_SEC) { _media.delete(`${gid}:${msgId}`); return null; }
+  return v;
+}

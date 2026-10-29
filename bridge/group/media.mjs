@@ -37,8 +37,8 @@ export async function download(url, timeoutMs = 20000) {
 
 // ── 视觉识别 ────────────────────────────────────────────
 
-/** 动图取最多 3 帧拼横图；静态图直接缩放 */
-async function toVisionPng(buf) {
+/** 动图取最多 3 帧拼横图；静态图直接缩放。size 是长边像素（截图要看清字，得给大些） */
+async function toVisionPng(buf, { size = 384 } = {}) {
   let meta = null;
   try { meta = await sharp(buf, { animated: true }).metadata(); } catch { /* 不是动图 */ }
 
@@ -50,7 +50,7 @@ async function toVisionPng(buf) {
       for (let i = 0; i < frames; i += 1) {
         const idx = Math.floor((pages - 1) * (i / Math.max(1, frames - 1)));
         const f = await sharp(buf, { page: idx, pages: 1 })
-          .resize(200, 200, { fit: 'inside', withoutEnlargement: true })
+          .resize(Math.round(size / 2), Math.round(size / 2), { fit: 'inside', withoutEnlargement: true })
           .png().toBuffer();
         tiles.push(f);
       }
@@ -69,20 +69,35 @@ async function toVisionPng(buf) {
     } catch { /* 拼帧失败就用首帧 */ }
   }
 
-  return sharp(buf).resize(384, 384, { fit: 'inside', withoutEnlargement: true }).png().toBuffer();
+  return sharp(buf).resize(size, size, { fit: 'inside', withoutEnlargement: true }).png().toBuffer();
 }
 
 /**
  * 识别一张图
+ *
+ * 两档（2026-10-29 加详细档）：
+ *   表情包 → 20 字以内，只要"什么情绪"，便宜快
+ *   图片/截图 → 200 字以内，要画面主体 + 图上的字 + 认得出的人物/作品名
+ * 起因：群友发张带字的截图问"这上面写的啥"，20 字档只答"蓝发少女垂眼含泪挥筷"，
+ * 字全丢了 —— 用户看到的就是"她不懂图片的意思"。
+ *
  * @param {Buffer} buf
  * @param {string} hint '表情包' | '图片'
- * @returns {Promise<string|null>} 20 字以内的描述
+ * @param {{detail?:boolean}} [opts] detail=true 走详细档（长边 1024、max_tokens 400）
+ * @returns {Promise<string|null>}
  */
-export async function describeImage(buf, hint = '表情包') {
+export async function describeImage(buf, hint = '表情包', { detail = false } = {}) {
   if (!buf?.length) return null;
   let png;
-  try { png = await toVisionPng(buf); }
+  try { png = await toVisionPng(buf, { size: detail ? 1024 : 384 }); }
   catch (e) { console.error('  [media] 图片转换失败:', e.message); return null; }
+
+  const ask = detail
+    ? `这是 QQ 群里的${hint}。用 200 字以内中文说清楚：①画面主体是什么、在做什么；`
+      + `②图上有文字的话**原样抄出来**（重要）；③认得出的人物/角色/作品/游戏就说名字，认不出就别猜；④整体情绪。`
+      + `不要引号，不要"这张图"，不要客套话。`
+    : `这是 QQ 群里的${hint}。用 20 字以内中文描述画面内容和情绪，不要引号，不要"这张图"。`;
+  const maxTokens = detail ? 400 : 80;
 
   try {
     const res = await fetch(`${GATEWAY}/chat/completions`, {
@@ -93,11 +108,11 @@ export async function describeImage(buf, hint = '表情包') {
         messages: [{
           role: 'user',
           content: [
-            { type: 'text', text: `这是 QQ 群里的${hint}。用 20 字以内中文描述画面内容和情绪，不要引号，不要"这张图"。` },
+            { type: 'text', text: ask },
             { type: 'image_url', image_url: { url: `data:image/png;base64,${png.toString('base64')}` } },
           ],
         }],
-        max_tokens: 80,
+        max_tokens: maxTokens,
       }),
       signal: AbortSignal.timeout(45000),
     });
@@ -160,7 +175,7 @@ export function lookup(buf) {
  * 学一张新图：识别 + 入库 + 存文件
  * @returns {Promise<{desc:string, md5:string, isNew:boolean}|null>}
  */
-export async function learn(buf, { from = '', hint = '表情包', ext = 'gif' } = {}) {
+export async function learn(buf, { from = '', hint = '表情包', ext = 'gif', detail = null } = {}) {
   const key = md5(buf);
   const idx = loadIndex();
   if (idx[key]) {
@@ -169,7 +184,9 @@ export async function learn(buf, { from = '', hint = '表情包', ext = 'gif' } 
     return { desc: idx[key].desc, md5: key, isNew: false };
   }
 
-  const desc = await describeImage(buf, hint);
+  // 表情包永远走简档（便宜、够用）；"图片"默认走详细档
+  const useDetail = detail ?? (hint !== '表情包');
+  const desc = await describeImage(buf, hint, { detail: useDetail });
   if (!desc) return null;
 
   try { writeFileSync(`${STICKER_DIR}/${key}.${ext}`, buf); } catch { /* 存不下也不影响识别 */ }
@@ -212,7 +229,7 @@ export async function sendPicture(gid, imageUrl, callApi, { maxWidth = 520 } = {
     const r = await callApi('send_group_msg', { group_id: Number(gid), message: imageCQ(out) });
     const txt = JSON.stringify(r ?? {});
     const ok = r?.status === 'ok' || r?.retcode === 0 || /EventChecker|rich media transfer failed/i.test(txt);
-    return ok ? { ok: true, path: out } : { ok: false, reason: `发送失败 ${txt.slice(0, 80)}` };
+    return ok ? { ok: true, path: out, messageId: r?.data?.message_id } : { ok: false, reason: `发送失败 ${txt.slice(0, 80)}` };
   } catch (e) {
     return { ok: false, reason: String(e?.message ?? e).slice(0, 80) };
   }

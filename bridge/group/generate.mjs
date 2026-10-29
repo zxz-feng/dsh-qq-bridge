@@ -17,6 +17,9 @@ import { profileLine, toneHint, load as loadMember } from './members.mjs';
 import { chat, usageLine } from './llm.mjs';
 import { fullPersona, shortPersona, ANCHOR, personaVersion } from './persona.mjs';
 import { shouldSearch, extractQuery, gather, hotwords } from './search.mjs';
+import { fetchPage, pageBlock, extractUrl } from './webpage.mjs';
+import { lookupInfo, lookupCv } from './lookup.mjs';
+import { findPicture } from './findpic.mjs';
 
 const MAX_TURNS_CTX = Number(process.env.GROUP_CTX_TURNS ?? 20);
 const REANCHOR_EVERY = Number(process.env.GROUP_REANCHOR_EVERY ?? 8);
@@ -38,11 +41,17 @@ export function parseReply(raw, { maxParts = 2 } = {}) {
   const stickers = [];
   const voices = [];
   const sings = [];
+  const reads = [];   // [[read:URL]]   去读这个链接
+  const infos = [];   // [[info:关键词]] 去查这个是什么
+  const looks = [];   // [[look:关键词]] 去找一张图
 
   text = text.replace(/\[\[sticker[:：]\s*([^\]]+)\]\]/gi, (_, v) => { stickers.push(String(v).trim()); return ' '; });
   text = text.replace(/\[\[voice[:：]\s*([^\]]+)\]\]/gi, (_, v) => { voices.push(String(v).trim()); return ' '; });
   // [[sing:歌名]] —— 模型**自己**想唱时唯一能触发音频的标记（2026-10-28 加）
   text = text.replace(/\[\[sing[:：]\s*([^\]]+)\]\]/gi, (_, v) => { sings.push(String(v).trim()); return ' '; });
+  text = text.replace(/\[\[read[:：]\s*([^\]]+)\]\]/gi, (_, v) => { reads.push(String(v).trim()); return ' '; });
+  text = text.replace(/\[\[info[:：]\s*([^\]]+)\]\]/gi, (_, v) => { infos.push(String(v).trim()); return ' '; });
+  text = text.replace(/\[\[look[:：]\s*([^\]]+)\]\]/gi, (_, v) => { looks.push(String(v).trim()); return ' '; });
 
   const parts = text
     .split(/\|\|\|/)
@@ -50,7 +59,55 @@ export function parseReply(raw, { maxParts = 2 } = {}) {
     .filter(Boolean)
     .slice(0, maxParts);   // 平时最多 2 条；长回答场景放到 4 条
 
-  return { parts, stickers, voices, sings };
+  return { parts, stickers, voices, sings, reads, infos, looks };
+}
+
+/**
+ * 执行模型自己发起的工具请求（最多两个，宁少不滥）
+ * @returns {Promise<{blocks:string[], pictures:object[], used:string[]}>}
+ */
+async function runTools({ reads, infos, looks }) {
+  const blocks = [];
+  const pictures = [];
+  const used = [];
+  let budget = 2;
+
+  for (const u of reads.slice(0, 1)) {
+    if (budget <= 0) break;
+    budget -= 1;
+    const r = await fetchPage(u);
+    blocks.push(pageBlock(r));
+    used.push('read:' + u.slice(0, 40));
+    if (r.ok) console.log(`  [tool] 读了 ${r.site}「${String(r.title ?? '').slice(0, 24)}」${r.text.length} 字`);
+    else console.log(`  [tool] 读不了 ${u.slice(0, 40)}：${r.reason}`);
+  }
+
+  for (const q of infos.slice(0, 1)) {
+    if (budget <= 0) break;
+    budget -= 1;
+    const cvOnly = /(cv|声优|配音)/i.test(q) && q.length <= 20;
+    const r = cvOnly ? await lookupCv(q.replace(/(的)?(cv|声优|配音)/gi, '').trim() || q) : await lookupInfo(q);
+    blocks.push(r.block || `\n【查「${q}」没查到】`);
+    used.push('info:' + q.slice(0, 30));
+    console.log(`  [tool] 查了「${q}」${r.ok ? '' : '（没查到）'}`);
+  }
+
+  for (const q of looks.slice(0, 1)) {
+    if (budget <= 0) break;
+    budget -= 1;
+    const r = await findPicture(q);
+    used.push('look:' + q.slice(0, 30));
+    if (r.ok) {
+      pictures.push({ url: r.url, caption: r.caption, from: r.from, kind: r.kind });
+      blocks.push(`\n【我找到一张图（${r.from}）：${r.caption || q}。系统会把它发出去，你就说一句"找着了"之类，别描述图里的细节】`);
+      console.log(`  [tool] 找到图 ${r.from} ${String(r.url).slice(0, 60)}`);
+    } else {
+      blocks.push(`\n【我去找「${q}」的图，没找到：${r.reason}。照实说找不到，别编】`);
+      console.log(`  [tool] 找图失败 ${q}：${r.reason}`);
+    }
+  }
+
+  return { blocks, pictures, used };
 }
 
 /**
@@ -61,7 +118,7 @@ export function parseReply(raw, { maxParts = 2 } = {}) {
  * @param {object} o.msg      {uin, name, text, atMe, images:[{url,desc}]}
  * @returns {Promise<{parts:string[], stickers:string[], voices:string[], model:string, usage:object, searched:boolean}>}
  */
-export async function generate({ gid, policy = {}, msg }) {
+export async function generate({ gid, policy = {}, msg, depth = 0, extra = '' }) {
   const pv = personaVersion();
   const state = loadPersonaState(gid);
   const isFirst = state.turns === 0;
@@ -74,9 +131,9 @@ export async function generate({ gid, policy = {}, msg }) {
   const tone = toneHint(msg.uin);
 
   // ── 要不要先搜 ──
-  let searchBlock = '';
-  let searched = false;
-  if (shouldSearch(msg.text) && (policy.searchPerDay ?? 20) > 0) {
+  let searchBlock = extra || '';
+  let searched = Boolean(extra);
+  if (depth === 0 && shouldSearch(msg.text) && (policy.searchPerDay ?? 20) > 0) {
     const q = extractQuery(msg.text);
     if (q.length >= 2) {
       try {
@@ -125,6 +182,13 @@ export async function generate({ gid, policy = {}, msg }) {
     '- 但**你自己想唱**（被要求"整个活"、自己想秀一段）：必须在回复里写 [[sing:歌名]]，系统才会真的放。'
       + '没有这个标记就**绝对不要说"唱首歌""这就来"**——说了做不到，主人会来问的。',
     '- 如果下面给了【我刚刚查到的】：挑关键的一两句说清楚那是什么，别只说"我知道""听过"',
+    depth === 0
+      ? '- **需要看东西/查东西时自己动手，别让人自己去查**：\n'
+        + '  · 有人发了链接、或你要引用某个页面 → 写 [[read:链接]]（系统会去读，下一轮你就有正文了）\n'
+        + '  · 被问"这是谁/什么游戏/谁配的音" → 写 [[info:关键词]]（系统查萌娘百科+VNDB）\n'
+        + '  · 有人要某角色/某作品的图 → 写 [[look:关键词]]（系统去找图并发出来）\n'
+        + '  一轮最多两个标记；标记会被系统吃掉，不要在正文里解释它'
+      : '- 材料已经在上面了：用你自己的话回答，**不要再写任何 [[...]] 标记**；查不到就说查不到',
     '- [[pass]] 只能用在"这条根本不是跟你说话"的时候（群里别人互聊、你插不上嘴）。',
     '  被 @、被叫名字、被回复时**绝对不能 pass**，哪怕只是回一句"这个我不干哦"。',
     '- 不想接、被要求做不该做的事（骂人、冒充、发广告）：用一句短话温柔挡回去，不要沉默。',
@@ -147,18 +211,33 @@ export async function generate({ gid, policy = {}, msg }) {
     + (searched ? ' | 已联网' : ''));
 
   if (/\[\[pass\]\]/i.test(raw) && raw.replace(/\[\[pass\]\]/gi, '').trim().length < 3) {
-    return { parts: [], stickers: [], voices: [], sings: [], model, usage, searched, passed: true };
+    return { parts: [], stickers: [], voices: [], sings: [], reads: [], infos: [], looks: [], pictures: [], model, usage, searched, passed: true };
   }
 
-  const { parts, stickers, voices, sings } = parseReply(
-    raw.replace(/\[\[pass\]\]/gi, ''), { maxParts: wantsLong ? 4 : 2 },
-  );
+  const parsed = parseReply(raw.replace(/\[\[pass\]\]/gi, ''), { maxParts: wantsLong ? 4 : 2 });
+
+  // ── 工具回合（只跑一跳，避免无限套娃）──
+  if (depth === 0) {
+    const autoUrl = extractUrl(msg.text);
+    const reads = parsed.reads.length ? parsed.reads : (autoUrl ? [autoUrl] : []);
+    if (reads.length || parsed.infos.length || parsed.looks.length) {
+      const { blocks, pictures, used } = await runTools({
+        reads, infos: parsed.infos, looks: parsed.looks,
+      });
+      if (blocks.length) {
+        const r2 = await generate({ gid, policy, msg, depth: 1, extra: '\n' + blocks.join('\n') });
+        return { ...r2, pictures, tools: used, searched: true };
+      }
+    }
+  }
+
+  const { parts, stickers, voices, sings } = parsed;
 
   state.turns += 1;
   state.pv = pv;
   savePersonaState(gid, state);
 
-  return { parts, stickers, voices, sings, model, usage, searched };
+  return { parts, stickers, voices, sings, reads: [], infos: [], looks: [], pictures: [], model, usage, searched };
 }
 
 export function contextTurns(gid) { return loadPersonaState(gid).turns; }
