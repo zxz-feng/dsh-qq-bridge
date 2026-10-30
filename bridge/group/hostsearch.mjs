@@ -72,5 +72,6 @@ export async function hostFetch(url) {
 export async function hostSpeak(text, preset) {
   const t = String(text ?? '').trim();
   if (!t) return null;
-  return call('/voice', { text: t, preset }, 12000);
+  // 25 秒：真跑 RVC 转换一次约 6 秒，冷启动可能十几秒；12 秒会把正常转换也掐断
+  return call('/voice', { text: t, preset }, 25000);
 }

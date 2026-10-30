@@ -397,7 +397,7 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
       }
       if (dry) voiced = true;
     } else {
-      console.log('  [group] 语音没合成出来（宿主没装 dsh-voice / 接口不通）→ 退回文字');
+      console.log('  [group] 语音没合成出来（没装 dsh-voice / 合成超时 / RVC 未连上）→ 退回文字');
     }
   }
 
