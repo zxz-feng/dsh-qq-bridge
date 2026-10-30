@@ -389,7 +389,9 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
       console.log(`  [group] 语音合成成功（${v.ms}ms${v.cached ? '，命中缓存' : ''}）`);
       if (dry) console.log(`  [dry-run] 会发语音: ${spoken.slice(0, 40)}`);
       else {
-        const r = await callApi('send_group_msg', { group_id: Number(gid), message: quote + recordCQ(stage(v.path, 'voice')) });
+        // ⚠️ 语音**不带回复引用**：QQ 把 [CQ:reply]+[CQ:record] 渲染成一个空气泡
+        // （2026-10-30 实测：同一条音频单独发能听，带 reply 就成了「空消息」）
+        const r = await callApi('send_group_msg', { group_id: Number(gid), message: recordCQ(stage(v.path, 'voice')) });
         const ok = sendOk(r);
         console.log(`  [group] 语音${ok ? '已发' : '发送失败'}`);
         if (!ok) console.error('          ', JSON.stringify(r).slice(0, 200));
