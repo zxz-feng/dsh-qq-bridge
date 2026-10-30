@@ -51,13 +51,30 @@ function cookieHeader() {
 // 文件名带上段长：以后改 SEG_SEC 会自动换新缓存，不会误用旧片段
 function cachePath(bvid) { return `${VOICE_DIR}/${bvid}_${SEG_SEC}s.mp3`; }
 
+
+/**
+ * 换声地址：环境变量优先，其次现读语音插件的 settings.json。
+ * 为什么现读：settings.json 是设置页随时会改的，而子进程的 env 是启动时固化的，
+ * 走 env 就得重启 dsh-web 才能生效 —— 用户明确要求"能改就立刻生效"。
+ */
+function singUrl() {
+  const fromEnv = String(process.env.SING_URL ?? '').trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const base = process.env.DSH_HOME || '/root/.dsh';
+    const f = `${base}/voice/settings.json`;
+    if (!existsSync(f)) return '';
+    return String(JSON.parse(readFileSync(f, 'utf8')).singUrl ?? '').trim();
+  } catch { return ''; }
+}
+
 /**
  * 她自己的嗓子唱：把切好的 59 秒发给本地 /sing（demucs 分离 + RVC + 混音）
  * 没配 SING_URL、或者本地没开 → 返回 null，调用方就放原曲，绝不因此不发语音
  * 缓存：同 BV 同段长只换一次
  */
 async function singRemote(file, bvid) {
-  const url = String(process.env.SING_URL ?? '').trim();
+  const url = singUrl();
   if (!url) return null;
   const out = `${VOICE_DIR}/${bvid}_${SEG_SEC}s_her.mp3`;
   if (existsSync(out)) return out;
@@ -182,8 +199,10 @@ export async function makeVoice(query) {
 
   // 缓存命中直接用
   if (existsSync(cachePath(bvid))) {
-      return {
-      ok: true, path: cachePath(bvid), title: pick.title, bvid,
+    // 缓存命中也要过一遍换声：否则「第一次没配 /sing、后来配了」的歌永远是原曲
+    const herCached = await singRemote(cachePath(bvid), bvid);
+    return {
+      ok: true, path: herCached || cachePath(bvid), her: !!herCached, title: pick.title, bvid,
       label: String(kw).slice(0, 16), sec: SEG_SEC, cached: true,
     };
   }
