@@ -73,10 +73,9 @@ function singUrl() {
  * 没配 SING_URL、或者本地没开 → 返回 null，调用方就放原曲，绝不因此不发语音
  * 缓存：同 BV 同段长只换一次
  */
-async function singRemote(file, bvid) {
+async function singRemoteTo(file, out) {
   const url = singUrl();
   if (!url) return null;
-  const out = `${VOICE_DIR}/${bvid}_${SEG_SEC}s_her.mp3`;
   if (existsSync(out)) return out;
   const t0 = Date.now();
   try {
@@ -100,6 +99,25 @@ async function singRemote(file, bvid) {
     console.log(`  [voice] 换声失败，放原曲：${e.message}`);
     return null;
   }
+}
+
+/** 单曲：固定命名，方便缓存 */
+async function singRemote(file, bvid) {
+  return singRemoteTo(file, `${VOICE_DIR}/${bvid}_${SEG_SEC}s_her.mp3`);
+}
+
+/**
+ * 整首：每段都换声（用户 2026-10-30 问「唱完整版会不会生效」）
+ * 串行做，避免把本地 GPU 挤爆；一段 7~8 秒，6 段约 45 秒
+ */
+async function singSegments(segs) {
+  const out = [];
+  for (let i = 0; i < segs.length; i += 1) {
+    const her = await singRemoteTo(segs[i], segs[i].replace(/\.mp3$/, '_her.mp3'));
+    out.push(her || segs[i]);
+    if (her) console.log(`  [voice] 整首换声 ${i + 1}/${segs.length}`);
+  }
+  return out;
 }
 
 /**
@@ -289,8 +307,10 @@ export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG } = {}) {
       segs.push(p);
     }
     if (segs.length) {
+      const hers = await singSegments(segs);
       return {
-        ok: true, segments: segs, title: pick.title, bvid,
+        ok: true, segments: hers, her: hers.some((p, i) => p !== segs[i]),
+        title: pick.title, bvid,
         total: meta.total, count: segs.length, truncated: meta.truncated, cached: true,
       };
     }
@@ -327,8 +347,11 @@ export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG } = {}) {
     total, count, truncated: need > count, segSec: SEG_SEC,
   }));
 
+  const hers = await singSegments(segments);
+
   return {
-    ok: true, segments, title: pick.title, bvid,
+    ok: true, segments: hers, her: hers.some((p, i) => p !== segments[i]),
+    title: pick.title, bvid,
     total, count, truncated: need > FULL_MAX_SEG, cached: false,
   };
 }
