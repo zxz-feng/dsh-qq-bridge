@@ -40,6 +40,19 @@ export const EMPTY_ALLOWLIST = {
 }
 
 export const EMPTY_GROUP_CFG = {
+  private: {
+    _说明: '私聊策略：一对一有问必答，命令与群里完全一致',
+    enabled: true,
+    dryRun: false,
+    replyProb: 1,
+    coldProb: 0,
+    dailyActive: 999,
+    dailyTotal: 2000,
+    cooldownSec: 0,
+    hardCooldownSec: 0,
+    memberCooldownMin: 0,
+    quietHours: [],
+  },
   _说明: '群聊白名单与策略。enabled=false 立即停用；dryRun=true 只生成不发送。',
   groups: {},
   defaults: {

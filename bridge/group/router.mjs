@@ -27,6 +27,7 @@ import * as commands from './commands.mjs';
 import { chat } from './llm.mjs';
 import { shortPersona, ANCHOR } from './persona.mjs';
 import { hostSpeak } from './hostsearch.mjs';
+import { stage } from './paths.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
 // 群策略文件：插件里由 GROUP_CFG 指过来（家目录），独立跑时退回同目录
@@ -43,7 +44,15 @@ export function loadConfig() {
 /** 取某个群的策略（groups 里的覆盖 defaults） */
 export function policyFor(gid) {
   const cfg = loadConfig();
-  const g = cfg.groups?.[String(gid)] ?? null;
+  const key = String(gid);
+  // 私聊用伪 gid（p + QQ号）：让同一套命令/生成/表情包流程直接复用。
+  // 策略单独放 cfg.private，默认「有问必答」——私聊本来就是一对一，没什么好冷场的。
+  if (key.startsWith('p')) {
+    const p = cfg.private;
+    if (!p || p.enabled === false) return null;
+    return { ...(cfg.defaults ?? {}), ...p, admin: { ...(cfg.defaults?.admin ?? {}), ...(p.admin ?? {}) } };
+  }
+  const g = cfg.groups?.[key] ?? null;
   if (!g || g.enabled === false) return null;
   return { ...(cfg.defaults ?? {}), ...g, admin: { ...(cfg.defaults?.admin ?? {}), ...(g.admin ?? {}) } };
 }
@@ -99,7 +108,7 @@ function scheduleDeferred(gid, msg, sec, policy, callApi, evt, hard = false) {
 
 // ── 主入口 ───────────────────────────────────────────────
 
-export async function handleGroupMessage(evt, { callApi }) {
+export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
   const gid = String(evt.group_id ?? '');
   if (!gid) return;
 
@@ -129,7 +138,8 @@ export async function handleGroupMessage(evt, { callApi }) {
   if (/^\[markdown\]/.test(text)) return;
   if (!text && !parsed.images?.length) return;
 
-  const atMe = (parsed.at ?? []).some((x) => String(x) === SELF);
+  // 私聊里每一句都算「点了名」：一对一不需要先 @ 才回答
+  const atMe = isPrivate || (parsed.at ?? []).some((x) => String(x) === SELF);
   const replyMatch = rawMsg.match(/\[CQ:reply,id=(-?\d+)\]/);
   const replyToMe = replyMatch ? store.isMyMessage(gid, replyMatch[1]) : false;
   const hasImage = (parsed.images?.length ?? 0) > 0;
@@ -203,7 +213,7 @@ export async function handleGroupMessage(evt, { callApi }) {
   if (commands.isOwner(uin, policy)) {
     const cmd = commands.parseCommand(text);
     if (cmd) {
-      const done = await runCommand(cmd, { gid, uin, name, policy, callApi, at: parsed.at ?? [], evt });
+      const done = await runCommand(cmd, { gid, uin, name, policy, callApi, at: parsed.at ?? [], evt, isPrivate });
       if (done) return;
     }
   }
@@ -217,7 +227,7 @@ export async function handleGroupMessage(evt, { callApi }) {
     if (toMe) {
       const look = commands.parseLookup(text);
       if (look) {
-        const done = await runCommand(look, { gid, uin, name, policy, callApi, at: parsed.at ?? [], evt });
+        const done = await runCommand(look, { gid, uin, name, policy, callApi, at: parsed.at ?? [], evt, isPrivate });
         if (done) return;
       }
     }
@@ -304,6 +314,29 @@ export async function handleGroupMessage(evt, { callApi }) {
 
 // ── 生成 + 发送 ──────────────────────────────────────────
 
+/**
+ * 私聊入口：把私聊伪装成一个「群」，复用整条群聊链路。
+ *
+ * 为什么这么干：群聊那条链上挂着命令解析、四源搜索、贴吧、找资源、点歌、
+ * 表情包、风格档、上下文摘要……重写一份必然漏。所以只做两件事：
+ *   ① gid 换成 `p<QQ号>`，策略读 cfg.private；
+ *   ② callApi 包一层，把 send_group_msg 翻成 send_private_msg。
+ * 其余逻辑一个字不改。
+ */
+export async function handlePrivateMessage(evt, { callApi }) {
+  const uid = String(evt.user_id ?? evt.sender?.user_id ?? '');
+  if (!uid || uid === SELF) return;
+  const gid = `p${uid}`;
+  if (!policyFor(gid)) {
+    console.log('  [private] 私聊未开启（group-allowlist.json 里 private.enabled）');
+    return;
+  }
+  const shim = (action, params = {}, timeoutMs) => (action === 'send_group_msg'
+    ? callApi('send_private_msg', { user_id: Number(uid), message: params.message }, timeoutMs)
+    : callApi(action, params, timeoutMs));
+  return handleGroupMessage({ ...evt, message_type: 'group', group_id: gid }, { callApi: shim, isPrivate: true });
+}
+
 async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, hard = false }) {
   const sil = commands.isSilenced(gid);
   if (sil) { console.log('  [group] 静默中，放弃这次回复'); return; }
@@ -356,7 +389,7 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
       console.log(`  [group] 语音合成成功（${v.ms}ms${v.cached ? '，命中缓存' : ''}）`);
       if (dry) console.log(`  [dry-run] 会发语音: ${spoken.slice(0, 40)}`);
       else {
-        const r = await callApi('send_group_msg', { group_id: Number(gid), message: quote + recordCQ(v.path) });
+        const r = await callApi('send_group_msg', { group_id: Number(gid), message: quote + recordCQ(stage(v.path, 'voice')) });
         const ok = sendOk(r);
         console.log(`  [group] 语音${ok ? '已发' : '发送失败'}`);
         if (!ok) console.error('          ', JSON.stringify(r).slice(0, 200));
@@ -474,7 +507,7 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
 
 // ── 主人命令执行 ─────────────────────────────────────────
 
-async function runCommand(cmd, { gid, uin, name, policy, callApi, at, evt }) {
+async function runCommand(cmd, { gid, uin, name, policy, callApi, at, evt, isPrivate = false }) {
   const dry = policy.dryRun !== false;
   const quote = evt?.message_id ? `[CQ:reply,id=${evt.message_id}]` : '';
   const send = async (body) => {
@@ -486,7 +519,13 @@ async function runCommand(cmd, { gid, uin, name, policy, callApi, at, evt }) {
     if (!ok) console.error('          ', JSON.stringify(r).slice(0, 200));
   };
 
-  console.log(`  [cmd] 主人 ${name} → ${cmd.kind}${cmd.arg ? ' ' + cmd.arg : ''}`);
+  console.log(`  [cmd] ${isPrivate ? '私聊' : '主人'} ${name} → ${cmd.kind}${cmd.arg ? ' ' + cmd.arg : ''}`);
+
+  // 禁言/撤回是群管动作，私聊里没有这个语义 —— 直接说清楚，别让它发一条失败的 API
+  if (isPrivate && (cmd.kind === 'mute' || cmd.kind === 'recall')) {
+    await send('私聊里没有禁言和撤回呀，那是在群里才有的');
+    return true;
+  }
 
   const r = await commands.execute(cmd, {
     gid, uin, name, policy, callApi, at,

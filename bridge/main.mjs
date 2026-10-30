@@ -28,6 +28,8 @@ const made = seedFiles(HOME)
 let cfg = loadConfig(HOME)
 const env = envFor(cfg, HOME)
 env.MEDIA_DIR = env.MEDIA_DIR || join(HOME, 'media')
+Object.assign(process.env, env)   // 让后面 import 的 group/* 也看到同一套目录
+console.log(`媒体目录 ${process.env.MEDIA_DIR} → 容器 ${process.env.CQ_MEDIA || '/app/napcat/config/media'}`)
 for (const [k, v] of Object.entries(env)) {
   if (v !== undefined && v !== null && v !== '') process.env[k] = String(v)
 }
@@ -39,13 +41,13 @@ log(`=== QQ 桥（家目录 ${HOME}）===`)
 if (made.length) log(`首次运行，铺了：${made.join('、')}`)
 
 // 动态 import：必须在 env 设好之后
-let WebSocket, parseCQ, askDshFor, handleGroupMessage, policyFor, loadGroupConfigFn
+let WebSocket, parseCQ, askDshFor, handleGroupMessage, handlePrivateMessage, policyFor, loadGroupConfigFn
 let pathsMod, mediaMod
 try {
   ;({ default: WebSocket } = await import('ws'))
   ;({ parseCQ } = await import('./cq-parser.mjs'))
   ;({ askDshFor } = await import('./dsh-qq.mjs'))
-  ;({ handleGroupMessage, policyFor, loadConfig: loadGroupConfigFn } = await import('./group/router.mjs'))
+  ;({ handleGroupMessage, handlePrivateMessage, policyFor, loadConfig: loadGroupConfigFn } = await import('./group/router.mjs'))
   pathsMod = await import('./group/paths.mjs')
   mediaMod = await import('./group/media.mjs')
 } catch (e) {
@@ -174,9 +176,12 @@ async function handlePrivate(evt) {
     }) + '\n')
 
     let e = pending.get(from)
-    if (!e) { e = { msgs: [], images: [], timer: null }; pending.set(from, e) }
+    if (!e) { e = { msgs: [], images: [], timer: null, sender: null, message_id: null, raw: null }; pending.set(from, e) }
     if (parsed.text) e.msgs.push(parsed.text)
     if (parsed.images.length) e.images.push(...parsed.images)
+    e.sender = evt.sender ?? e.sender
+    e.message_id = evt.message_id ?? e.message_id
+    e.raw = evt.message ?? e.raw
     if (e.timer) clearTimeout(e.timer)
     const wait = randomDelay()
     e.timer = setTimeout(() => { void flushPrivate(from) }, wait)
@@ -194,32 +199,25 @@ async function flushPrivate(qq) {
   const mode = currentMode()
   if (mode === 'off') { log('  模式 off，忽略'); return }
 
-  const incoming = e.msgs.join('\n') || '(只发了图片)'
-  log(`  模式 ${mode}，生成中…`)
-  let draft
-  try { draft = await askDshFor(qq, incoming, e.images) } catch (err) {
-    counters.failed += 1
-    console.error('  ❌ 生成失败:', err?.message ?? err)
-    return
+  const text = e.msgs.join('\n')
+  // 私聊走的是**群聊那条完整链路**（命令 / 搜索 / 贴吧 / 找资源 / 点歌 / 表情包 / 风格档），
+  // 只是 gid 换成 p<QQ>、发送动作翻成 send_private_msg —— 见 router.mjs 的 handlePrivateMessage。
+  const evt = {
+    post_type: 'message',
+    message_type: 'private',
+    user_id: Number(qq),
+    self_id: Number(process.env.SELF_QQ ?? 0),
+    message_id: e.message_id,
+    message: text || e.raw || '',
+    raw_message: text || '',
+    sender: e.sender ?? { user_id: Number(qq), nickname: String(qq) },
   }
-  if (!draft) { counters.failed += 1; console.error('  ❌ 空回复'); return }
-
-  log(`  💬 ${draft}`)
-  bumpCount()
-
-  if (mode === 'auto') {
-    const r = await callApi('send_private_msg', { user_id: Number(qq), message: draft })
-    const ok = r?.status === 'ok' || r?.retcode === 0
-    if (ok) counters.privateOut += 1
-    appendFileSync(join(HOME, 'replies.jsonl'), JSON.stringify({
-      ts: new Date().toISOString(), to: qq, incoming, draft, status: ok ? 'sent' : 'failed',
-    }) + '\n')
-    log(ok ? '  ✅ 已发出' : `  ❌ 发送失败: ${JSON.stringify(r)}`)
-  } else {
-    appendFileSync(join(HOME, 'replies.jsonl'), JSON.stringify({
-      ts: new Date().toISOString(), to: qq, incoming, draft, status: 'pending',
-    }) + '\n')
-    log(`  📝 待发送（模式 ${mode}）：${draft}`)
+  log(`  模式 ${mode}，进群聊同款链路…`)
+  try {
+    await handlePrivateMessage(evt, { callApi })
+  } catch (err) {
+    counters.failed += 1
+    console.error('  ❌ 私聊处理失败:', err?.message ?? err)
   }
 }
 

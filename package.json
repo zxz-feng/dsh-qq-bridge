@@ -55,7 +55,7 @@
   },
   "scripts": {
     "verify": "node scripts/verify.mjs",
-    "test": "node test/run.mjs && node test/api.mjs && node test/client.mjs && node test/tools.mjs",
+    "test": "node test/run.mjs && node test/api.mjs && node test/client.mjs && node test/tools.mjs && node test/private.mjs",
     "sim": "node test/sim-group.mjs",
     "test:tools": "node test/tools.mjs"
   },

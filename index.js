@@ -25,7 +25,7 @@ import { startHostApi } from './lib/host-api.mjs'
 import { homeDir } from './lib/home.mjs'
 import { makeApi } from './lib/api.mjs'
 import { sendJson, sendBinary, readBody, sameOriginOk, maskConfig } from './lib/http.mjs'
-import { normalize, loadConfig, saveAllowlist, saveGroupCfg, loadAllowlist, loadGroupCfg, DEFAULTS, seedFiles } from './bridge/config.mjs'
+import { normalize, loadConfig, saveAllowlist, saveGroupCfg, loadAllowlist, loadGroupCfg, DEFAULTS, seedFiles, envFor } from './bridge/config.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BRIDGE_SCRIPT = join(HERE, 'bridge', 'main.mjs')
@@ -99,6 +99,12 @@ export function apply(ctx, config = {}) {
   const hostEnv = {
     BRIDGE_HOME: home,
     DSH_HOME: process.env.DSH_HOME || '',
+    // 把配置派生出来的目录/网关变量**在父进程就算好**再交给子进程。
+    // 之前靠子进程 import 时自己算，结果 group/paths.mjs 在 env 赋值之前就被静态
+    // import 走了默认值（bridge/napcat-data/media），那个目录**没挂进容器**，
+    // 于是发语音/图片全都 Failed to open input —— 这类"看代码对、跑起来错"的坑，
+    // 根子是**求值顺序**，所以干脆在唯一的地方算一次。
+    ...envFor(cfg, home),
     ...(tiebaMcp ? { TIEBA_MCP: tiebaMcp } : {}),
     // 抓网页的代理：配置页填了就用它，否则沿用环境变量
     ...((config.webProxy || process.env.WEB_PROXY || process.env.HTTPS_PROXY)
