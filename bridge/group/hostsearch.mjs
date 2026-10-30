@@ -64,3 +64,13 @@ export async function hostFetch(url) {
   if (!d?.text) return null;
   return { url: String(d.url ?? url), statusCode: Number(d.statusCode ?? 0), text: String(d.text) };
 }
+
+/**
+ * 借宿主的嗓子（dsh-voice 插件）。
+ * @returns {Promise<{path:string, ms:number, cached:boolean}|null>} 拿不到就 null
+ */
+export async function hostSpeak(text, preset) {
+  const t = String(text ?? '').trim();
+  if (!t) return null;
+  return call('/voice', { text: t, preset }, 12000);
+}

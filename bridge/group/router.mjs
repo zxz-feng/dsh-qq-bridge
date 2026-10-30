@@ -26,6 +26,7 @@ import { hotwords, gather } from './search.mjs';
 import * as commands from './commands.mjs';
 import { chat } from './llm.mjs';
 import { shortPersona, ANCHOR } from './persona.mjs';
+import { hostSpeak } from './hostsearch.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
 // 群策略文件：插件里由 GROUP_CFG 指过来（家目录），独立跑时退回同目录
@@ -343,7 +344,31 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   const dry = policy.dryRun !== false;
   const quote = !isDeferred && (msg.atMe || evt?.message_id) ? `[CQ:reply,id=${evt.message_id}]` : '';
 
-  for (let i = 0; i < out.parts.length; i += 1) {
+  // ── 要语音就真发语音 ────────────────────────────────────────────────────
+  // 嗓子长在宿主进程里（dsh-voice 插件），桥只能通过宿主小门借。
+  // 借不到就**照常发文字**，绝不让"语音失败"变成"没回复"。
+  const wantVoice = /(发|来|用|说)(条|个|句)?(语音|声音)|语音(说|回)|念(给我|一下)|读出来|听听你的?声/.test(msg.text || '');
+  let voiced = false;
+  if (wantVoice) {
+    const spoken = out.parts.join('，');
+    const v = await hostSpeak(spoken, policy.voicePreset);
+    if (v?.path) {
+      console.log(`  [group] 语音合成成功（${v.ms}ms${v.cached ? '，命中缓存' : ''}）`);
+      if (dry) console.log(`  [dry-run] 会发语音: ${spoken.slice(0, 40)}`);
+      else {
+        const r = await callApi('send_group_msg', { group_id: Number(gid), message: quote + recordCQ(v.path) });
+        const ok = sendOk(r);
+        console.log(`  [group] 语音${ok ? '已发' : '发送失败'}`);
+        if (!ok) console.error('          ', JSON.stringify(r).slice(0, 200));
+        if (ok) { store.pushSentId(gid, r?.data?.message_id); voiced = true; }
+      }
+      if (dry) voiced = true;
+    } else {
+      console.log('  [group] 语音没合成出来（宿主没装 dsh-voice / 接口不通）→ 退回文字');
+    }
+  }
+
+  for (let i = 0; i < (voiced ? 0 : out.parts.length); i += 1) {
     const body = (i === 0 ? quote : '') + out.parts[i];
     if (dry) {
       console.log(`  [dry-run] 会发: ${body}`);
