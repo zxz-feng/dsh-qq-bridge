@@ -380,10 +380,24 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   // ── 要语音就真发语音 ────────────────────────────────────────────────────
   // 嗓子长在宿主进程里（dsh-voice 插件），桥只能通过宿主小门借。
   // 借不到就**照常发文字**，绝不让"语音失败"变成"没回复"。
+  /**
+   * 从「发个语音，内容是：“X”」「语音说 X」「念一下 X」里抠出**要念的原话**。
+   * 为什么必须抠：模型经常先评论一句（「我是AI，没嗓子啊」），然后这句话被合成成语音发出去，
+   * 听起来就是「她用语音说自己没嗓子」。有引号/明确动词时，原话优先于模型输出。
+   */
+  const spokenPayload = (text) => {
+    const s = String(text || '')
+    if (!/语音|念|读|说/.test(s)) return ''
+    const q = s.match(/[“"「']([^”"」']{2,120})[”"」']/)
+    if (q) return q[1].trim()
+    const m = s.match(/(?:语音说|语音念|念一下|读一下|说一句|内容是)[：:，,]?\s*(.{2,120})$/)
+    return m ? m[1].trim() : ''
+  }
+
   const wantVoice = /(发|来|用|说)(条|个|句)?(语音|声音)|语音(说|回)|念(给我|一下)|读出来|听听你的?声/.test(msg.text || '');
   let voiced = false;
   if (wantVoice) {
-    const spoken = out.parts.join('，');
+    const spoken = spokenPayload(msg.text) || out.parts.join('，');
     const v = await hostSpeak(spoken, policy.voicePreset);
     if (v?.path) {
       console.log(`  [group] 语音合成成功（${v.ms}ms${v.cached ? '，命中缓存' : ''}）`);
