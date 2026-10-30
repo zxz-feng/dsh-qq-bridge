@@ -122,6 +122,13 @@ console.log('\n【决策器（零 token）】')
 // ── 2.5 命令：孙吧开关 / 找资源 ─────────────────────────
 console.log('\n【命令解析】')
 {
+  // 2026-10-30 踩坑：点歌命令把口语当歌名，连放两条 vlog（「唱下雨爱这首歌」→ 搜「下雨爱这首歌」）
+  eq('唱下雨爱这首歌 → 雨爱', parseCommand('唱下雨爱这首歌')?.arg, '雨爱')
+  eq('来一首《雨爱》 → 雨爱（find 不能抢走）', parseCommand('来一首《雨爱》')?.arg, '雨爱')
+  eq('放一首雨爱 → 雨爱', parseCommand('放一首雨爱')?.arg, '雨爱')
+  eq('点歌起风了 → 起风了', parseCommand('点歌起风了')?.arg, '起风了')
+  eq('完整版要认出来', parseCommand('唱 雨爱 完整版')?.full, true)
+  eq('闲话不能被当歌名', parseCommand('放开我的token要炸了'), null)
   eq('开孙吧模式', parseCommand('开孙吧模式')?.kind, 'style')
   eq('开个孙吧（带量词也要认）', parseCommand('开个孙吧')?.kind, 'style')
   eq('关掉孙吧（不能认成开）', parseCommand('关掉孙吧')?.kind, 'style')

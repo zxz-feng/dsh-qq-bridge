@@ -52,11 +52,45 @@ function cookieHeader() {
 function cachePath(bvid) { return `${VOICE_DIR}/${bvid}_${SEG_SEC}s.mp3`; }
 
 /**
+ * 她自己的嗓子唱：把切好的 59 秒发给本地 /sing（demucs 分离 + RVC + 混音）
+ * 没配 SING_URL、或者本地没开 → 返回 null，调用方就放原曲，绝不因此不发语音
+ * 缓存：同 BV 同段长只换一次
+ */
+async function singRemote(file, bvid) {
+  const url = String(process.env.SING_URL ?? '').trim();
+  if (!url) return null;
+  const out = `${VOICE_DIR}/${bvid}_${SEG_SEC}s_her.mp3`;
+  if (existsSync(out)) return out;
+  const t0 = Date.now();
+  try {
+    const buf = readFileSync(file);
+    const fd = new FormData();
+    fd.append('file', new Blob([buf], { type: 'audio/mpeg' }), 'in.mp3');
+    fd.append('pitch', String(Number(process.env.SING_PITCH ?? 0)));
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 180_000);
+    let r;
+    try {
+      r = await fetch(url.replace(/\/+$/, '') + '/sing', { method: 'POST', body: fd, signal: ctrl.signal });
+    } finally { clearTimeout(timer); }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = Buffer.from(await r.arrayBuffer());
+    if (blob.length < 2048) throw new Error(`返回太小（${blob.length}B）`);
+    writeFileSync(out, blob);
+    console.log(`  [voice] 换声完成 ${Math.round(blob.length / 1024)}KB / ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    return out;
+  } catch (e) {
+    console.log(`  [voice] 换声失败，放原曲：${e.message}`);
+    return null;
+  }
+}
+
+/**
  * 安全错误信息
  * ⚠️ execFile 的 e.message 会把**整条命令行**带出来，里面有 B站 Cookie。
  *    这条信息一旦发到群里就是账号泄露。所以只取 stderr 最后一行，并抹掉 Cookie。
  */
-function safeErr(e, tag) {
+export function safeErr(e, tag = '错误') {
   const raw = String(e?.stderr || e?.stdout || e?.message || e);
   const line = raw.split('\n').map((x) => x.trim()).filter(Boolean).pop() || tag;
   return `${tag}: ${line.replace(/Cookie:\s*\S+/gi, 'Cookie:***').slice(0, 100)}`;
@@ -178,8 +212,11 @@ export async function makeVoice(query) {
   const size = statSync(cachePath(bvid)).size;
   if (size < 2000) return { ok: false, reason: '切出来的文件太小，可能没声音' };
 
+  // 配了本地 /sing 就用她的嗓子唱；失败/没配就放原曲（不能因为换声失败就不发语音）
+  const her = await singRemote(cachePath(bvid), bvid);
+
   return {
-    ok: true, path: cachePath(bvid), title: pick.title, bvid,
+    ok: true, path: her || cachePath(bvid), her: !!her, title: pick.title, bvid,
     label: String(kw).slice(0, 16), sec: dur, start, size, cached: false,
   };
 }

@@ -20,7 +20,7 @@ import * as members from './members.mjs';
 import { record, maybeSummarize } from './context.mjs';
 import { generate } from './generate.mjs';
 import { learn, lookup, download, imageCQ, pickSticker, sendPicture } from './media.mjs';
-import { makeVoice, makeVoiceFull, recordCQ, judgeSong } from './voice.mjs';
+import { makeVoice, makeVoiceFull, recordCQ, judgeSong, safeErr } from './voice.mjs';
 import { styleBias } from './style.mjs';
 import { hotwords, gather } from './search.mjs';
 import * as commands from './commands.mjs';

@@ -11,7 +11,7 @@
  *   改完即时生效（bridge 每轮都重读）。
  * ============================================================================
  */
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readJson, writeJson } from '../lib/home.mjs'
 
@@ -235,6 +235,22 @@ export function saveGroupCfg(home, patch = {}) {
 }
 
 /** 把配置翻译成子进程里那些模块认的环境变量（它们在 import 时就读） */
+/**
+ * 从 $DSH_HOME/voice/settings.json 取本地 /sing 地址，喂给桥的子进程。
+ * 读不到就当没配 —— 点歌照旧放原曲，不会因为换声把语音整条弄没。
+ */
+function singEnv() {
+  try {
+    const base = process.env.DSH_HOME || join(process.env.HOME || '/root', '.dsh')
+    const f = join(base, 'voice', 'settings.json')
+    if (!existsSync(f)) return {}
+    const s = JSON.parse(readFileSync(f, 'utf8'))
+    const url = String(s.singUrl ?? '').trim()
+    if (!url) return {}
+    return { SING_URL: url, SING_PITCH: String(Number(s.rvcPitch ?? 0)) }
+  } catch { return {} }
+}
+
 export function envFor(cfg, home) {
   const env = {
     HOME_DIR: home,
@@ -252,6 +268,9 @@ export function envFor(cfg, home) {
     VISION_MODEL: cfg.llm.visionModel,
     STORE_DIR: join(home, 'store'),
     CONTEXTS_DIR: join(home, 'contexts'),
+    // 她自己的嗓子唱：地址放在**语音插件**的设置里（settings.json 的 singUrl），
+    // 不在这里重复一份配置，免得两处不一致
+    ...singEnv(),
   }
   if (cfg.media.dir) env.MEDIA_DIR = cfg.media.dir
   if (cfg.media.cqDir) env.CQ_MEDIA = cfg.media.cqDir

@@ -81,7 +81,7 @@ export function parseCommand(text) {
     { kind: 'style', re: /^(?:孙吧|孙笑川|嘴臭|嘴毒|傲娇|冷淡|元气)(?:模式)?\s*(?:状态|开着|开了|开了吗|在不在)?[?？]?$/ },
     // 「帮我找个 X」——找资源 +（要图的话）带缩略图
     { kind: 'find', re: /^(?:[帮给][\u4e00-\u9fa5A-Za-z0-9_]{0,10}?|替我|求|要)?(?:找|搜|搞|弄|来|推荐|整)(?:个|一个|一张|一下|一找)?\s*(.{2,30})$/ },
-    { kind: 'sing', re: /^(唱|来一段|来首|来点|放首歌?|放个歌|点歌|放)\s*(?:个|一首|首|一段|一下|点)?\s*(.*)$/ },
+    { kind: 'sing', re: /^(唱一下|唱下|唱|来一首|来一曲|来一段|来首|来点|放首歌?|放个歌|放一首|放首|放一下|点歌|放)\s*(?:个|一首|首|一段|一下|点)?\s*(.*)$/ },
     { kind: 'sticker', re: /^(发个?表情包?|来张表情|发表情|来个表情)\s*(.*)$/ },
     { kind: 'mute', re: /^禁言\s*(.*)$/ },
     { kind: 'recall', re: /^(撤回|删掉|撤销)$/ },
@@ -94,14 +94,20 @@ export function parseCommand(text) {
     const m = t.match(re);
     if (!m) continue;
     // sing/search 的正文在 m[2]；find 只有一个捕获组，正文在 m[1]（2026-10-29 踩过）
-    const arg = (m[2] ?? m[1] ?? '').trim();
+    const rawArg = (m[2] ?? m[1] ?? '').trim();
+    // ⚠️ 分发表拿到的是**正则捕获的原文**，脏东西还都在：
+    //    2026-10-30「唱下雨爱这首歌」→ 捕获「雨爱这首歌」→ 去搜「雨爱这首歌」→ 放出一条 vlog
+    //    cleanSongText 会把「这首歌/那首歌」「《》」这些口语剥掉，sing/search 必须先过一遍
+    const arg = (kind === 'sing' || kind === 'search') ? cleanSongText(rawArg) : rawArg;
     // ⚠️ 歌名要过 sanity 检查：否则"放开我的token要炸了"会被当成点歌
     const bare = arg.replace(FULL_RE, ' ').trim();
     // find 只在"确实是在找东西"时才认（不然"来找我"这种会被当成搜东西）
-    if (kind === 'find' && !/(黄油|galgame|游戏|本子|里番|资源|漫画|画师|作品|图|封面|缩略图|壁纸)/i.test(t)) return null;
+    // ⚠️ 这里必须是 continue 不能 return null：find 的正则很宽（"来"也算动词），
+    //    否则「来一首《雨爱》」会被 find 先吃掉、判不通过，然后整条命令直接没了（2026-10-30）
+    if (kind === 'find' && !/(黄油|galgame|游戏|本子|里番|资源|漫画|画师|作品|图|封面|缩略图|壁纸)/i.test(t)) continue;
     // ⚠️ 只有需要"歌名/关键词"的命令才过这个检查；
     //    不然别的规则（孙吧开关之类）捕获到什么都会被当成歌名判掉（2026-10-28 踩过）
-    if ((kind === 'sing' || kind === 'search') && bare && !looksLikeTitle(bare)) return null;
+    if ((kind === 'sing' || kind === 'search') && bare && !looksLikeTitle(bare)) continue;
     // "唱完整版雨爱" / "整首雨爱" → 分段发
     const full = FULL_RE.test(arg) || FULL_RE.test(t);
     let seconds = null;
@@ -293,6 +299,8 @@ function cleanSongText(text) {
     .replace(/@[^\s]+/g, ' ')            // 去掉 @某人（可能是文本形式的 @昵称，不只是 CQ 段）
     .replace(/(小鲸鱼|鲸鱼)/g, ' ')
     .replace(/[《》「」"",，。、?？!！~～]/g, ' ')
+    // 「唱下雨爱这首歌」→ 句尾的「这首歌」是口语，不是歌名的一部分
+    .replace(/(这首歌|那首歌|这歌|那歌|这首|那首)\s*$/g, ' ')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
@@ -332,7 +340,7 @@ export function parseSong(text, { addressed = false } = {}) {
   const body = t.replace(/(完整版|整首歌|整首|全曲)/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
   // ① 明确的点歌动词：唱 / 来一首 / 放首歌 / 点歌 / 放一首 …
-  const explicit = body.match(/^(唱|来一首|来一段|来首|来点|放首歌|放个歌|放一首|放首|点歌)\s*(?:个|一首|首|一段|一下|点)?\s*(.*)$/);
+  const explicit = body.match(/^(唱一下|唱下|唱|来一首|来一段|来首|来点|放首歌|放个歌|放一首|放首|放一下|点歌)\s*(?:个|一首|首|一段|一下|点)?\s*(.*)$/);
   if (explicit) {
     const q = (explicit[2] ?? '').trim();
     if (!q) return full ? { query: '', full: true } : null;

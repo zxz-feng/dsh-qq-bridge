@@ -153,9 +153,13 @@ export function scoreVideo(v, query, expect = 0) {
     //   "在百万豪装录音棚大声听邓紫棋《光年之外》" 里"光年之外"两侧是书名号 → 正常
     // 所以这里只看"前一个字是中文且不是常见修饰词前缀"
     const prefixOK = /^(小|大|老|新|旧|前|后)$/.test(before) ? false : true;
-    const stickBefore = /[\u4e00-\u9fa5]/.test(before) && !/[的在听唱放首和与及]/.test(before);
+    // 书名号/引号包着歌名 = 作者自己标了「这是这首歌」，比「前面黏着字」可信
+    // （2026-10-30：「在百万豪装录音棚大声听 杨丞琳《雨爱》」被误判成黏连，输给了一条 2:21 的歌词剪辑）
+    const escQ = String(query).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const wrapped = new RegExp(`[《【「\\[（(]\\s*${escQ}\\s*[》】」\\]）)]`).test(title);
+    const stickBefore = !wrapped && /[\u4e00-\u9fa5]/.test(before) && !/[的在听唱放首和与及]/.test(before);
     const stickAfter = /[a-zA-Z]/.test(after) && /^(dj|remix|ver|版)/i.test(cleanTitle.slice(idx + q.length));
-    if (!stickBefore && !stickAfter) { s += 12; why.push('歌名完整独立出现'); }
+    if (!stickBefore && !stickAfter) { s += 12; why.push(wrapped ? '书名号包着歌名' : '歌名完整独立出现'); }
     else { s += 3; why.push(stickBefore ? '前面黏着别的字（可能是别的歌）' : '带remix/版本后缀'); }
   }
   else if (query.length >= 2) {
