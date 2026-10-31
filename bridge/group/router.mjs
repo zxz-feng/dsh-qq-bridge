@@ -394,7 +394,7 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     return m ? m[1].trim() : ''
   }
 
-  const wantVoice = /(发|来|用|说)(条|个|句)?(语音|声音)|语音(说|回)|念(给我|一下)|读出来|听听你的?声/.test(msg.text || '');
+  const wantVoice = /(发|来|用|说)(条|个|句)?(语音|声音)|语音(说|回)|念(给我|一下)|读出来|听听你的?声|说句话|出声|开口|亲口|打个招呼|欢迎(我|一下)|念一?遍|说一?遍|用嘴说/.test(msg.text || '');
   let voiced = false;
   if (wantVoice) {
     const spoken = spokenPayload(msg.text) || out.parts.join('，');

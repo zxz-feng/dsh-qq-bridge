@@ -119,6 +119,13 @@ const BAD_TITLE = [
   /dj|DJ|remix|Remix|1\.03x|加速|降调|升调|八倍速|版权|侵删|无版权|仅供/,// 
 ];
 
+/** 翻唱 / 改编 / 特殊版本：用户点原曲时这些都不算（2026-10-31 起风了选了林俊杰高音版） */
+const COVER_TITLE = [
+  /翻唱|翻自|改编|重制|Cover|COVER|cover|A\s?cappella|阿卡贝拉/,
+  /高音版|低音版|男版|女版|男生版|女生版|合唱版|对唱版|慢速版|加速版|片段|剪辑版|变调|降调|升调/,
+  /极致蓝光|收藏版|珍藏版|发烧版|环绕版|纯享|纯音乐|伴奏|消音|和声版|钢琴版|吉他版|古筝版|器乐版/,
+];
+
 /** 像"一首歌"的标题特征（加分） */
 const GOOD_TITLE = [
   /MV|mv|PV|官方|无损|高音质|音源|完整版|动态歌词|歌词/,
@@ -131,7 +138,7 @@ const GOOD_TITLE = [
  * @param {string} query  用户点的歌名
  * @param {number} expect 这首歌大概多长（秒，0=不知道）
  */
-export function scoreVideo(v, query, expect = 0) {
+export function scoreVideo(v, query, expect = 0, artist = '') {
   const title = String(v.title ?? '');
   const dur = parseDur(v.duration);
   let s = 0;
@@ -177,6 +184,21 @@ export function scoreVideo(v, query, expect = 0) {
   for (const re of GOOD_TITLE) {
     if (re.test(title)) { s += 2; why.push('标题像官方音源'); break; }
   }
+  // ②b 翻唱/改编/特殊版本：重量级扣分，别让「【林俊杰】-《起风了》-最燃高音版」冒充原曲
+  for (const re of COVER_TITLE) {
+    if (re.test(title)) { s -= 14; why.push('像翻唱/改编/特殊版本'); break; }
+  }
+  // ②c 标题里挂着别人的名字（【林俊杰】），而点歌人没提这个人 → 多半是翻唱
+  const bracket = title.match(/【([^】]{2,10})】/) || title.match(/\[([^\]]{2,10})\]/)
+  if (bracket) {
+    const who = bracket[1]
+    const known = String(artist || '')
+    if (!who.includes('官方') && !who.includes('原唱') && !query.includes(who) && !(known && who.includes(known))) {
+      s -= 8; why.push(`标题挂着「${who}」（可能是翻唱）`)
+    }
+  }
+  // ②d 歌名里已知的原唱出现在标题 → 加分
+  if (artist && title.includes(String(artist).slice(0, 4))) { s += 6; why.push('标题含原唱名') }
 
   // ③ 时长：单曲一般在 2~7 分钟
   if (dur) {
@@ -227,7 +249,7 @@ export async function pickSongVideo(query, { title = '' } = {}) {
   try { probed = await probeSong(title || kw); } catch { /* 查不到不影响 */ }
   const expect = probed.median || 0;
 
-  const scored = vids.map((v) => ({ v, ...scoreVideo(v, kw, expect) }))
+  const scored = vids.map((v) => ({ v, ...scoreVideo(v, kw, expect, probed.artist) }))
     .filter((x) => x.score > -50)
     .sort((a, b) => b.score - a.score || (b.v.play ?? 0) - (a.v.play ?? 0));
 
