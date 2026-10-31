@@ -64,33 +64,45 @@ async def cmd_search(kw, num):
     return {'ok': True, 'keyword': kw, 'videos': out}
 
 
-async def cmd_upsong(uid, kw, pages=3):
+async def cmd_upsong(uid, kw, pages=0):
     """在某个 UP 主（原曲搬运号）的投稿里按标题找歌。
 
     2026-10-31 主人指路：想要原曲就别在站内大搜，直接去 VV音乐局 / JLRS-LeoFM
-    这类"放原曲"的 UP 投稿里翻。站内搜索对这些号权重很低，翻投稿反而准。
+    这类"放原曲"的 UP 投稿里翻。
+    用空间自带的「投稿搜索」（get_videos 的 keyword 参数）——一次请求就能命中，
+    不再翻页（他们几千条投稿，翻 10 页根本不够）。
+    pages > 0 时，搜索没命中才退化成逐页翻（老接口失效时的兜底）。
     """
     from bilibili_api import user as bili_user
 
     cred = load_cred()
     u = bili_user.User(int(uid), credential=cred)
     hits = []
-    for pn in range(1, max(1, pages) + 1):
-        r = await u.get_videos(pn=pn, ps=30)
-        vl = (r.get('list') or {}).get('vlist') or []
-        for v in vl:
-            t = clean(v.get('title'))
-            if kw and kw in t:
-                hits.append({
-                    'bvid': v.get('bvid', ''),
-                    'title': t,
-                    'author': v.get('author', ''),
-                    'play': v.get('play', 0),
-                    'duration': v.get('length', ''),
-                    'desc': clean(v.get('description'))[:100],
-                })
-        if hits:
-            break
+
+    def push(v):
+        t = clean(v.get('title'))
+        if kw and kw in t:
+            hits.append({
+                'bvid': v.get('bvid', ''),
+                'title': t,
+                'author': v.get('author', ''),
+                'play': v.get('play', 0),
+                'duration': v.get('length') or v.get('duration', ''),
+                'desc': clean(v.get('description'))[:100],
+            })
+
+    r = await u.get_videos(pn=1, ps=30, keyword=kw)
+    for v in ((r.get('list') or {}).get('vlist') or []):
+        push(v)
+
+    if not hits and pages:
+        for pn in range(1, max(1, int(pages)) + 1):
+            r = await u.get_videos(pn=pn, ps=30)
+            for v in ((r.get('list') or {}).get('vlist') or []):
+                push(v)
+            if hits:
+                break
+
     return {'ok': True, 'keyword': kw, 'uid': int(uid), 'videos': hits}
 
 

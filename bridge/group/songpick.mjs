@@ -143,7 +143,7 @@ async function upScan(kw) {
   const out = [];
   await Promise.all(ORIGINAL_UPS.map(async (u) => {
     try {
-      const vids = await biliUpSong(u.mid, kw, 10);
+      const vids = await biliUpSong(u.mid, kw, 0);
       for (const v of vids) out.push({ ...v, author: v.author || u.name, upName: u.name });
     } catch { /* 单个号翻不动就算了 */ }
   }));
@@ -270,9 +270,12 @@ export async function pickSongVideo(query, { title = '' } = {}) {
   const kw = String(query ?? '').trim();
   if (!kw) return { ok: false, reason: '没听清歌名' };
 
-  let vids;
-  try { vids = await biliSearch(kw, 12); }
-  catch (e) { return { ok: false, reason: '搜索失败' }; }
+  // 站内搜索与原曲搬运号投稿搜索并行（后者一次请求就命中，不再翻页）
+  const [vids, ups] = await Promise.all([
+    biliSearch(kw, 12).catch(() => null),
+    upScan(kw).catch(() => []),
+  ]);
+  if (!vids) return { ok: false, reason: '搜索失败' };
   if (!vids.length) return { ok: false, reason: '搜不到' };
 
   // 查一下这首歌大概多长，用来卡时长
@@ -287,21 +290,26 @@ export async function pickSongVideo(query, { title = '' } = {}) {
   if (!scored.length) return { ok: false, reason: `没有像《${kw}》的视频`, probed };
 
   let best = scored[0];
-  // 站内没有干净的原曲（分数低 / 像翻唱）→ 去原曲搬运号的投稿里翻一遍
-  const looksCover = best.score < 12 || COVER_TITLE.some((re) => re.test(String(best.v.title)));
-  if (looksCover && ORIGINAL_UPS.length) {
-    const ups = await upScan(kw);
-    if (ups.length) {
-      const upBest = ups
-        .map((v) => ({ v, ...scoreVideo(v, kw, expect, probed.artist) }))
-        .map((x) => ({ ...x, score: x.score + 10, why: [...x.why, `原曲搬运号 ${x.v.upName} 投稿`] }))
-        .filter((x) => x.score > -50)
-        .sort((a, b) => b.score - a.score)[0];
-      if (upBest && upBest.score > best.score) {
-        console.log(`  [voice] 站内不像原曲 → 翻投稿命中 ${upBest.v.bvid}《${upBest.v.title.slice(0, 30)}》`);
-        best = upBest;
-      }
-    }
+  // 原曲搬运号的命中基本就是官方音源：站内搜到的常常是 2 分钟的剪辑、混响、循环歌单。
+  // 所以只要搬运号标题里出现《歌名》，直接采信，不再比分数。
+  const upScored = ups
+    .map((v) => ({ v, ...scoreVideo(v, kw, expect, probed.artist) }))
+    .map((x) => ({ ...x, score: x.score + 10, why: [...x.why, `原曲搬运号 ${x.v.upName} 投稿`] }))
+    .filter((x) => x.score > -50)
+    .sort((a, b) => b.score - a.score);
+  const upBest = upScored[0];
+  // 只认「《歌名》- 歌手」这种官方音源排版；JLRS-LeoFM 的「在百万豪装录音棚大声听 X《歌》」
+  // 是别人翻唱/重录，不能当原曲（主人 2026-10-31 点《起风了》时踩过）
+  const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const exactRe = new RegExp(`《\\s*${esc}\\s*》\\s*[-—–]`);
+  const upExact = upScored.find((x) => exactRe.test(String(x.v.title)));
+  const looksCover = best.score < 14 || COVER_TITLE.some((re) => re.test(String(best.v.title)));
+  if (upExact) {
+    console.log(`  [voice] 搬运号命中《${kw}》→ ${upExact.v.bvid}《${upExact.v.title.slice(0, 30)}》`);
+    best = upExact;
+  } else if (looksCover && upBest && upBest.score > best.score) {
+    console.log(`  [voice] 站内不像原曲 → 搬运号命中 ${upBest.v.bvid}《${upBest.v.title.slice(0, 30)}》`);
+    best = upBest;
   }
 
   if (best.score < 8) {
