@@ -148,17 +148,21 @@ async function singRemoteTo(file, out) {
     fd.append('model_name', opt.model);
     fd.append('protect', String(opt.protect));
     fd.append('index_rate', String(opt.index));
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 300_000);
     let r = null;
     let lastErr = null;
     // 本地服务可能在开机/唤醒后正在加载模型，第一次连不上很常见（2026-10-31 14:31 就是这样，
     // 结果整首放成了原曲）。网络级失败重试 2 次再认输。
+    // 每次尝试单独计时：以前三共用 300 秒的 controller，第一次 fetch 挂住就把
+    // 整条消息堵死（2026-10-31 21:42，主人连发三条都没回应）
     for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 60_000);
       try {
         r = await fetch(url.replace(/\/+$/, '') + '/sing', { method: 'POST', body: fd, signal: ctrl.signal });
+        clearTimeout(timer);
         break;
       } catch (e) {
+        clearTimeout(timer);
         lastErr = e;
         if (attempt < 3) {
           console.log(`  [voice] 换声连接失败（第 ${attempt} 次）：${e.message}，5 秒后重试`);
@@ -166,7 +170,6 @@ async function singRemoteTo(file, out) {
         }
       }
     }
-    clearTimeout(timer);
     if (!r) {
       // 连不上：可能是 5050 那头崩了（训练抢显存那次就是）。硬重启一次再试。
       if (await healRvc(url)) {
