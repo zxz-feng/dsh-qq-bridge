@@ -78,6 +78,7 @@ async function singRemoteTo(file, out) {
   if (!url) return null;
   if (existsSync(out)) return out;
   const t0 = Date.now();
+  console.log(`  [voice] 送换声 ${new Date().toTimeString().slice(0, 8)}（${Math.round(statSync(file).size / 1024)}KB）`);
   try {
     const buf = readFileSync(file);
     const fd = new FormData();
@@ -144,9 +145,24 @@ export function gc() {
   } catch { /* 目录不存在 */ }
 }
 
-/** 下载某 BV 的纯音频（m4a），返回本地路径 */
-async function downloadAudio(bvid) {
-  const out = `${VOICE_DIR}/${bvid}.src.%(ext)s`;
+/**
+ * 下载某 BV 的音频，返回本地路径。
+ * @param {string} bvid
+ * @param {{head?: boolean}} [opts] head=true 只抓前 70 秒（单段点歌够用，快得多）
+ *
+ * 2026-10-31：原来每次都整首下载、切完就删，一首 2 分钟的歌光下载就要一分半，
+ * 加上换声 25 秒 → 主人等了 125 秒。现在单段只抓开头 70 秒并且留在缓存里。
+ */
+async function downloadAudio(bvid, { head = false } = {}) {
+  if (!PY_ASR) throw new Error('没配 BILI_PY_ASR（装了 yt-dlp 的 python），点歌/唱歌不可用');
+  const tag = head ? '.head' : '.full';
+  // 已经有就直接用（同一首歌反复点不该反复下）
+  try {
+    const hit = readdirSync(VOICE_DIR).find((f) => f.startsWith(`${bvid}${tag}.`));
+    if (hit && statSync(`${VOICE_DIR}/${hit}`).size > 100 * 1024) return `${VOICE_DIR}/${hit}`;
+  } catch { /* 目录或文件不在，继续下 */ }
+
+  const out = `${VOICE_DIR}/${bvid}${tag}.%(ext)s`;
   const url = `https://www.bilibili.com/video/${bvid}`;
   const ck = cookieHeader();
   const args = [
@@ -155,15 +171,15 @@ async function downloadAudio(bvid) {
     '--add-header', 'Referer:https://www.bilibili.com',
     '--add-header', `Cookie:${ck}`,
     '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    url,
   ];
-  if (!PY_ASR) throw new Error('没配 BILI_PY_ASR（装了 yt-dlp 的 python），点歌/唱歌不可用');
+  if (head) args.push('--download-sections', '*0-70', '--force-keyframes-at-cuts');
+  args.push(url);
   try {
-    await exec(PY_ASR, args, { timeout: 90000, maxBuffer: 4 * 1024 * 1024 });
+    await exec(PY_ASR, args, { timeout: 120000, maxBuffer: 4 * 1024 * 1024 });
   } catch (e) {
     throw new Error(safeErr(e, '下载失败'));
   }
-  const found = readdirSync(VOICE_DIR).find((f) => f.startsWith(`${bvid}.src.`));
+  const found = readdirSync(VOICE_DIR).find((f) => f.startsWith(`${bvid}${tag}.`));
   if (!found) throw new Error('下载后找不到文件');
   return `${VOICE_DIR}/${found}`;
 }
@@ -242,8 +258,6 @@ export async function makeVoice(query) {
     await cutSegment(src, cachePath(bvid), start, dur);
   } catch (e) {
     return { ok: false, reason: '切段失败: ' + e.message };
-  } finally {
-    try { unlinkSync(src); } catch { /* 源文件删不掉留着也无所谓 */ }
   }
 
   const size = statSync(cachePath(bvid)).size;
