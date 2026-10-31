@@ -83,7 +83,8 @@ async function singRemoteTo(file, out) {
     const buf = readFileSync(file);
     const fd = new FormData();
     fd.append('file', new Blob([buf], { type: 'audio/mpeg' }), 'in.mp3');
-    fd.append('pitch', String(Number(process.env.SING_PITCH ?? 0)));
+    // 默认 auto：让本地服务按源人声基频算半音（男声→女声模型要 +12 左右）
+    fd.append('pitch', process.env.SING_PITCH != null ? String(Number(process.env.SING_PITCH)) : 'auto');
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 300_000);
     let r = null;
