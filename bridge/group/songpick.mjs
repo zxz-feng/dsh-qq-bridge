@@ -164,16 +164,23 @@ export function scoreVideo(v, query, expect = 0, artist = '') {
     // （2026-10-30：「在百万豪装录音棚大声听 杨丞琳《雨爱》」被误判成黏连，输给了一条 2:21 的歌词剪辑）
     const escQ = String(query).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const wrapped = new RegExp(`[《【「\\[（(]\\s*${escQ}\\s*[》】」\\]）)]`).test(title);
-    const stickBefore = !wrapped && /[\u4e00-\u9fa5]/.test(before) && !/[的在听唱放首和与及]/.test(before);
+    // 歌名紧跟在一个右括号后面，也算"作者自己标了歌名"：
+    // 「【洛天依原创】人是猫」去掉括号后是「洛天依原创人是猫」，人 前面黏着「创」，
+    // 会被判成"前面黏着别的字"。2026-10-31 就是这么把原曲判给了一条
+    // 「猫永远是猫，人有时候是狗！」的近似标题。
+    const afterBracket = new RegExp(`[】\\]）)]\\s*${escQ}`).test(title);
+    const stickBefore = !wrapped && !afterBracket && /[\u4e00-\u9fa5]/.test(before) && !/[的在听唱放首和与及]/.test(before);
     const stickAfter = /[a-zA-Z]/.test(after) && /^(dj|remix|ver|版)/i.test(cleanTitle.slice(idx + q.length));
-    if (!stickBefore && !stickAfter) { s += 12; why.push(wrapped ? '书名号包着歌名' : '歌名完整独立出现'); }
+    if (!stickBefore && !stickAfter) { s += 12; why.push(wrapped ? '书名号包着歌名' : (afterBracket ? '括号后紧跟歌名' : '歌名完整独立出现')); }
     else { s += 3; why.push(stickBefore ? '前面黏着别的字（可能是别的歌）' : '带remix/版本后缀'); }
   }
   else if (query.length >= 2) {
     // 允许标题里间隔出现（"周杰伦 - 晴 天"这种少见，主要防误判）
     const parts = query.split('').filter((c) => /[\u4e00-\u9fa5A-Za-z]/.test(c));
     const hit = parts.filter((c) => title.includes(c)).length;
-    if (hit / Math.max(1, parts.length) > 0.7) { s += 4; why.push('标题近似'); }
+    // 散字命中只能算"沾边"：以前给 +4，比"歌名出现在标题里但前面黏字"的 +3 还高，
+    // 于是「猫永远是猫，人有时候是狗！」压过了原曲《人是猫》。降到 +2。
+    if (hit / Math.max(1, parts.length) > 0.7) { s += 2; why.push('标题近似（字都沾边）'); }
     else return { score: -99, why: ['标题不含歌名'] };
   }
 
