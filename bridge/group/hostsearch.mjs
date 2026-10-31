@@ -15,6 +15,9 @@
  * ============================================================================
  */
 
+import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+
 // 每次调用现读环境变量：子进程启动后父进程不会再改，但这样测试和热改配置都方便
 const base = () => String(process.env.HOST_API_URL ?? '').replace(/\/+$/, '');
 const token = () => String(process.env.HOST_API_TOKEN ?? '');
@@ -69,6 +72,51 @@ export async function hostFetch(url) {
  * 借宿主的嗓子（dsh-voice 插件）。
  * @returns {Promise<{path:string, ms:number, cached:boolean}|null>} 拿不到就 null
  */
+// ── GPT-SoVITS 自愈 ──────────────────────────────────────────────────────
+// 2026-10-31：她的声音变成微软小艺，查出来是 GPT-SoVITS 那头 down 了，
+// 插件静默回落 Edge，发出去的是**别人的音色**。桥这边先探一下，不通就
+// 通过 ssh 让本地机器把服务拉起来（schtasks），等不到再让插件回落。
+const GSV_SETTINGS = process.env.VOICE_SETTINGS || '/root/dsh/voice/settings.json';
+const HEAL_TASK = process.env.VOICE_HEAL_TASK || 'GPT-SoVITS-API';
+
+function gsvUrl() {
+  try { return String(JSON.parse(readFileSync(GSV_SETTINGS, 'utf8')).gptsovitsUrl || ''); } catch { return ''; }
+}
+
+async function gsvAlive(url) {
+  try {
+    // GET /tts 会返回 400/500，只要连得上就算活着
+    await fetch(String(url).replace(/\/+$/, '') + '/tts', { method: 'GET', signal: AbortSignal.timeout(4000) });
+    return true;
+  } catch { return false; }
+}
+
+let lastHealAt = 0;
+async function ensureGsv(log = () => {}) {
+  const url = gsvUrl();
+  if (!url) return;
+  if (await gsvAlive(url)) return;
+  if (Date.now() - lastHealAt < 120_000) return;      // 两分钟内别反复 ssh
+  let host = '';
+  try { host = new URL(url).hostname; } catch { return; }
+  if (!host.startsWith('100.')) return;               // 只对 tailnet 上的本地机器动手
+  lastHealAt = Date.now();
+  log('GPT-SoVITS 不通，尝试远端拉起');
+  await new Promise((res) => {
+    execFile('ssh', [
+      '-i', process.env.VOICE_SSH_KEY || '/root/.ssh/zxz',
+      '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=8',
+      `${process.env.VOICE_SSH_USER || '18074'}@${host}`,
+      `schtasks /Run /TN ${HEAL_TASK}`,
+    ], { timeout: 25000 }, () => res());
+  });
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    if (await gsvAlive(url)) { log('GPT-SoVITS 已拉起'); return; }
+  }
+  log('GPT-SoVITS 拉不起来，这轮只能 Edge');
+}
+
 export async function hostSpeak(text, preset) {
   const t = String(text ?? '').trim();
   if (!t) return null;
@@ -77,5 +125,6 @@ export async function hostSpeak(text, preset) {
   //   · edge+rvc 引擎一次 57 秒
   // 桥先超时 → 插件那头其实还在跑 → 用户看到「她说发不了语音」。
   // 语音是一次性等待，慢一点也比失败好；真挂了插件自己会回落 Edge。
+  await ensureGsv((m) => console.log(`  [voice] ${m}`));
   return call('/voice', { text: t, preset }, 90000);
 }
