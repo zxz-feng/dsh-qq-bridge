@@ -20,7 +20,7 @@ import * as members from './members.mjs';
 import { record, maybeSummarize } from './context.mjs';
 import { generate } from './generate.mjs';
 import { learn, lookup, download, imageCQ, pickSticker, sendPicture } from './media.mjs';
-import { makeVoice, makeVoiceFull, recordCQ, judgeSong, safeErr } from './voice.mjs';
+import { makeVoice, makeVoiceFull, previewSong, recordCQ, judgeSong, safeErr } from './voice.mjs';
 import { styleBias } from './style.mjs';
 import { hotwords, gather } from './search.mjs';
 import * as commands from './commands.mjs';
@@ -108,6 +108,9 @@ function scheduleDeferred(gid, msg, sec, policy, callApi, evt, hard = false) {
 
 // ── 主入口 ───────────────────────────────────────────────
 
+// 「先报歌名、主人确认了再唱」的待确认队列（key = gid:uin，10 分钟过期）
+const pendingSing = new Map();
+
 export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
   const gid = String(evt.group_id ?? '');
   if (!gid) return;
@@ -135,6 +138,23 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
 
   const parsed = parseCQ(evt.message ?? rawMsg);
   const text = (parsed.text ?? '').trim();
+
+  // 上一条问过「搜到《X》，唱这个？」，这条就是答复
+  const pkey = `${gid}:${uin}`;
+  const pend = pendingSing.get(pkey);
+  if (pend && text) {
+    if (Date.now() - pend.at > 10 * 60 * 1000) pendingSing.delete(pkey);
+    else if (/^(唱|对|是|嗯|好|可以|行|就这个|没错|开始)/.test(text)) {
+      pendingSing.delete(pkey);
+      console.log(`  [group] 主人确认了：${pend.pick.title.slice(0, 26)} → 开唱`);
+      await runSingleSong({ query: pend.query, pick: pend.pick, quiet: true },
+        { gid, uin, name, policy, callApi, evt });
+      return;
+    } else if (/^(不|别|换|错|不是|不对)/.test(text)) {
+      pendingSing.delete(pkey);
+      console.log('  [group] 主人说不是这首 → 清掉待确认，等他说歌名');
+    }
+  }
   if (/^\[markdown\]/.test(text)) return;
   if (!text && !parsed.images?.length) return;
 
@@ -774,7 +794,7 @@ function pickDeflect() {
  * 单曲：扒一段 59 秒发出去
  * 搜不到时会用整句原文再试一次（"放生自己"这种连写的情况）
  */
-async function runSingleSong({ query, raw = '', quiet = false }, { gid, uin, name, policy, callApi, evt }) {
+async function runSingleSong({ query, raw = '', quiet = false, pick = null }, { gid, uin, name, policy, callApi, evt }) {
   const dry = policy.dryRun !== false;
   const quote = evt?.message_id ? `[CQ:reply,id=${evt.message_id}]` : '';
   const send = async (body) => {
@@ -789,8 +809,23 @@ async function runSingleSong({ query, raw = '', quiet = false }, { gid, uin, nam
   const cap = Number(policy.voicePerDay ?? 999);
   if (cap > 0 && used >= cap) { await send('今天放太多啦，明天再放'); return true; }
 
+  // 先报歌名，主人点头才唱（主人 2026-10-31 要求：「唱之前把搜到的音频名字告诉我」）
+  if (!pick && policy.confirmBeforeSing !== false) {
+    const pre = await previewSong(query);
+    if (!pre.ok) {
+      await send(`没扒到这首歌诶（${safeReason(pre.reason)}）`);
+      audit(gid, { gid, uin, song: query, ok: false, reason: pre.reason });
+      return true;
+    }
+    pendingSing.set(`${gid}:${uin}`, { query, pick: pre.pick, at: Date.now() });
+    const t = String(pre.pick.title).replace(/\s+/g, ' ').slice(0, 30);
+    console.log(`  [group] 选到「${t}」${pre.pick.duration} → 等主人确认`);
+    await send(`${quote}搜到「${t}」${pre.pick.duration}，唱这个？`);
+    return true;
+  }
+
   console.log(`  [group] 点歌: ${query}`);
-  let v = await makeVoice(query);
+  let v = await makeVoice(query, pick ? { pick } : {});
   if (!v.ok && /搜不到/.test(v.reason || '') && raw) {
     // 连写的歌名再试一次：把原句去掉"小鲸鱼/@/标点"整句当关键词
     const alt = String(raw)

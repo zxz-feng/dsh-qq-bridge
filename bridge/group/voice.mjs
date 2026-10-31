@@ -247,13 +247,25 @@ export function splitVersion(s) {
   return { kw, version: female ? 'female' : male ? 'male' : '' };
 }
 
-export async function makeVoice(query) {
+/**
+ * 只选歌、不下载不换声 —— 给「先报歌名、主人确认了再唱」用。
+ * 返回 {ok, pick:{bvid,title,duration,author}}
+ */
+export async function previewSong(query) {
+  const { kw, version } = splitVersion(query);
+  if (!kw) return { ok: false, reason: '没听清要什么' };
+  const sel = await pickSongVideo(kw, { title: kw, version });
+  if (!sel.ok) return { ok: false, reason: sel.reason };
+  return { ok: true, pick: sel.pick, why: sel.why ?? [] };
+}
+
+export async function makeVoice(query, { pick: forced = null } = {}) {
   gc();
   const { kw, version } = splitVersion(query);
   if (!kw) return { ok: false, reason: '没听清要什么' };
 
   // 选片：标题匹配 + 时长筛选 + 排除合集/reaction/remix，不只按播放量
-  const sel = await pickSongVideo(kw, { title: kw, version });
+  const sel = forced ? { ok: true, pick: forced, why: ['已确认'] } : await pickSongVideo(kw, { title: kw, version });
   if (!sel.ok) return { ok: false, reason: sel.reason };
   const pick = sel.pick;
   const bvid = pick.bvid;
