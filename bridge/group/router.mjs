@@ -394,10 +394,28 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     return m ? m[1].trim() : ''
   }
 
-  const wantVoice = /(发|来|用|说)(条|个|句)?(语音|声音)|语音(说|回)|念(给我|一下)|读出来|听听你的?声|说句话|出声|开口|亲口|打个招呼|欢迎(我|一下)|念一?遍|说一?遍|用嘴说/.test(msg.text || '');
+  // 判断「对方是不是在要声音」——不能用一张死词表，人不会照表说话。
+  // 2026-10-31 漏掉的真实句子：「你再说长一点，随便说点什么，我看看你的音色对不对」
+  // 含「说话/声音」类名词、或要求「再说/多说/说长」、或直接提「音色」都算。
+  const VOICE_HINT = new RegExp([
+    '(发|来|用|说)(条|个|句)?(语音|声音)',      // 发条语音 / 用语音说
+    '语音(说|回|念)',
+    '(念|读)(给我|一下|一遍|出来)',
+    '听听你的?(声|音)',
+    '说句话|出声|开口|亲口|用嘴说|打个招呼',
+    '欢迎(我|一下)',
+    '音色|嗓音|嗓子',
+    '说点什么|说点啥|多说点|多说几?句',
+    '再(说|来|念)(一)?(句|段|点|遍)',   // 「再说一句」算；「再说吧」不算
+    '说(两|几)句|说得?长一?点|说长',
+    '你倒是(说|用)',
+  ].join('|'), 'i');
+  const wantVoice = VOICE_HINT.test(msg.text || '');
   let voiced = false;
   if (wantVoice) {
-    const spoken = spokenPayload(msg.text) || out.parts.join('，');
+    // 有明确原话（引号 / 「内容是…」）就用原话；否则说模型自己写的那句 ——
+    // 它写的一般比从请求里抠出来的碎片更像人话，也更长（主人嫌过太短）。
+    const spoken = spokenPayload(msg.text) || out.parts.join('，').replace(/\s+/g, ' ').trim();
     const v = await hostSpeak(spoken, policy.voicePreset);
     if (v?.path) {
       console.log(`  [group] 语音合成成功（${v.ms}ms${v.cached ? '，命中缓存' : ''}）`);

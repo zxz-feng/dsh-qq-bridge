@@ -84,7 +84,7 @@ async function singRemoteTo(file, out) {
     fd.append('file', new Blob([buf], { type: 'audio/mpeg' }), 'in.mp3');
     fd.append('pitch', String(Number(process.env.SING_PITCH ?? 0)));
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 180_000);
+    const timer = setTimeout(() => ctrl.abort(), 300_000);
     let r;
     try {
       r = await fetch(url.replace(/\/+$/, '') + '/sing', { method: 'POST', body: fd, signal: ctrl.signal });
