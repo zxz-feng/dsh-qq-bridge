@@ -112,6 +112,8 @@ const BAD_TITLE = [
   /合集|盘点|排行榜|Top\s*\d+|前\s*\d+|串烧|半小时|一小时|\d+\s*小时|精选|歌单|连播/,
   // 非演唱类
   /reaction|Reaction|REACTION|直播|实况|解析|教程|教学|钢琴|吉他|谱|简谱|翻弹|指弹|舞蹈|翻跳/,
+  // 解说/科普/冷知识：标题里挂着歌名但根本不是歌（2026-10-31 搜《雨爱》冒出来的）
+  /你真的知道|你知道吗|冷知识|科普|背后的故事|揭秘|盘点向|为什么叫/,
   // 话题类（"抄袭届""网友评价""XX你怎么看"）
   /搞笑|沙雕|鬼畜|整活|吐槽|锐评|科普|新闻|评测|评价|怎么看|回应|抄袭|裁子|争议|塌房|翻车|瓜/,
   /夹子音|名场面|挑战|唱功|听听|试听|实力|开口跪|封神|现场|live|Live|LIVE|演唱会|翻唱|cover|Cover/,
@@ -266,14 +268,18 @@ export function shortLabel(query, v, probed = {}) {
  * 按歌名挑一条最像"这首歌"的视频
  * @returns {Promise<{ok:boolean, pick?:object, why?:string[], probed?:object, reason?:string}>}
  */
-export async function pickSongVideo(query, { title = '' } = {}) {
+export async function pickSongVideo(query, { title = '', version = '' } = {}) {
   const kw = String(query ?? '').trim();
   if (!kw) return { ok: false, reason: '没听清歌名' };
 
-  // 站内搜索与原曲搬运号投稿搜索并行（后者一次请求就命中，不再翻页）
-  const [vids, ups] = await Promise.all([
-    biliSearch(kw, 12).catch(() => null),
-    upScan(kw).catch(() => []),
+  // 要「女版」时把版本词带进搜索词；搬运号里只有原唱，这时不去翻
+  const skw = version === 'female' ? `${kw} 女声版` : version === 'male' ? `${kw} 男声版` : kw;
+  // 要版本时同时搜「带版本词」和「原样」两份：前者命中就用，没命中退回后者
+  // （像《雨爱》本来就是女声，加了「女声版」反而搜出奇怪的视频）
+  const [vids, plainVids, ups] = await Promise.all([
+    biliSearch(skw, 12).catch(() => null),
+    version ? biliSearch(kw, 12).catch(() => null) : Promise.resolve(null),
+    version ? Promise.resolve([]) : upScan(kw).catch(() => []),
   ]);
   if (!vids) return { ok: false, reason: '搜索失败' };
   if (!vids.length) return { ok: false, reason: '搜不到' };
@@ -283,7 +289,35 @@ export async function pickSongVideo(query, { title = '' } = {}) {
   try { probed = await probeSong(title || kw); } catch { /* 查不到不影响 */ }
   const expect = probed.median || 0;
 
-  const scored = vids.map((v) => ({ v, ...scoreVideo(v, kw, expect, probed.artist) }))
+  // 版本词加分/减分：主人说「女版」时就别给原唱（2026-10-31 点《忘情牛肉面》女版踩到）
+  const verAdjust = (v) => {
+    if (!version) return 0;
+    const t = String(v.title);
+    if (version === 'female') {
+      if (/女声|女版|女生版|女声翻唱|翻唱|女key|女调/.test(t)) return 8;
+      // 只惩罚「明确是男声」的；原唱本身可能就是女声（《雨爱》杨丞琳），别一刀切
+      if (/男声|男版|男生版/.test(t)) return -10;
+    }
+    if (version === 'male') {
+      if (/男声|男版|男生版/.test(t)) return 6;
+      if (/女声|女版/.test(t)) return -8;
+    }
+    return 0;
+  };
+  const scoreOne = (v) => {
+    const r = scoreVideo(v, kw, expect, probed.artist);
+    const adj = verAdjust(v);
+    return { v, score: r.score + adj, why: adj ? [...r.why, adj > 0 ? '版本对得上' : '版本不对'] : r.why };
+  };
+  let scored = vids.map(scoreOne);
+  if (version) {
+    const marked = scored.filter((x) => verAdjust(x.v) > 0);
+    if (!marked.length && plainVids?.length) {
+      console.log(`  [voice] 「${skw}」没有版本标记的命中 → 退回按《${kw}》搜`);
+      scored = plainVids.map(scoreOne);
+    }
+  }
+  scored = scored
     .filter((x) => x.score > -50)
     .sort((a, b) => b.score - a.score || (b.v.play ?? 0) - (a.v.play ?? 0));
 

@@ -233,13 +233,23 @@ async function cutSegment(src, dst, startSec, durSec) {
  * @param {string} query 歌名/关键词
  * @returns {Promise<{ok:boolean, path?:string, title?:string, bvid?:string, sec?:number, reason?:string}>}
  */
+/** 「女版/男版」这类版本词单独拎出来，不当歌名的一部分 */
+function splitVersion(s) {
+  const t = String(s ?? '');
+  const female = /女版|女生版|女声版|女声|女的唱/.test(t);
+  const male = /男版|男生版|男声版/.test(t);
+  const kw = t.replace(/女版|女生版|女声版|女声|女的唱|男版|男生版|男声版/g, ' ')
+    .replace(/[《》""'']/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+  return { kw, version: female ? 'female' : male ? 'male' : '' };
+}
+
 export async function makeVoice(query) {
   gc();
-  const kw = String(query).replace(/[《》""'']/g, ' ').trim().slice(0, 40);
+  const { kw, version } = splitVersion(query);
   if (!kw) return { ok: false, reason: '没听清要什么' };
 
   // 选片：标题匹配 + 时长筛选 + 排除合集/reaction/remix，不只按播放量
-  const sel = await pickSongVideo(kw, { title: kw });
+  const sel = await pickSongVideo(kw, { title: kw, version });
   if (!sel.ok) return { ok: false, reason: sel.reason };
   const pick = sel.pick;
   const bvid = pick.bvid;
@@ -314,10 +324,11 @@ function fullMetaPath(bvid) { return `${VOICE_DIR}/${bvid}_full.json`; }
  */
 export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG } = {}) {
   gc();
-  const kw = String(query).replace(/[《》""'']/g, ' ').replace(/(完整版|整首|全曲|整首歌|完整)/g, ' ').trim().slice(0, 40);
+  const { kw: rawKw, version } = splitVersion(query);
+  const kw = rawKw.replace(/(完整版|整首|全曲|整首歌|完整)/g, ' ').replace(/\s+/g, ' ').trim();
   if (!kw) return { ok: false, reason: '没听清要什么' };
 
-  const sel = await pickSongVideo(kw, { title: kw });
+  const sel = await pickSongVideo(kw, { title: kw, version });
   if (!sel.ok) return { ok: false, reason: sel.reason };
   const pick = sel.pick;
   const bvid = pick.bvid;
