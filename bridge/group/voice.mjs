@@ -57,6 +57,26 @@ function cachePath(bvid) { return `${VOICE_DIR}/${bvid}_${SEG_SEC}s.mp3`; }
  * 为什么现读：settings.json 是设置页随时会改的，而子进程的 env 是启动时固化的，
  * 走 env 就得重启 dsh-web 才能生效 —— 用户明确要求"能改就立刻生效"。
  */
+/**
+ * 换声参数：模型名 / protect / index_rate 也从 settings.json 现读（同 singUrl 的理由）。
+ * 2026-10-31 主人 A/B 后定：anjie2 + protect 0.55 + index 0.50 咬字最清楚。
+ */
+function singOpts() {
+  const o = { model: 'anjie2', protect: 0.55, index: 0.5 };
+  try {
+    const base = process.env.DSH_HOME || '/root/.dsh';
+    const f = `${base}/voice/settings.json`;
+    if (existsSync(f)) {
+      const c = JSON.parse(readFileSync(f, 'utf8'));
+      if (c.rvcModel) o.model = String(c.rvcModel).trim();
+      if (Number.isFinite(Number(c.rvcProtect))) o.protect = Number(c.rvcProtect);
+      if (Number.isFinite(Number(c.rvcIndexRate))) o.index = Number(c.rvcIndexRate);
+    }
+  } catch { /* 读不到就用默认 */ }
+  if (process.env.SING_MODEL) o.model = String(process.env.SING_MODEL);
+  return o;
+}
+
 function singUrl() {
   const fromEnv = String(process.env.SING_URL ?? '').trim();
   if (fromEnv) return fromEnv;
@@ -85,6 +105,11 @@ async function singRemoteTo(file, out) {
     fd.append('file', new Blob([buf], { type: 'audio/mpeg' }), 'in.mp3');
     // 默认 auto：让本地服务按源人声基频算半音（男声→女声模型要 +12 左右）
     fd.append('pitch', process.env.SING_PITCH != null ? String(Number(process.env.SING_PITCH)) : 'auto');
+    // 模型与两个咬字参数（2026-10-31 主人定稿：anjie2 / protect 0.55 / index 0.50）
+    const opt = singOpts();
+    fd.append('model_name', opt.model);
+    fd.append('protect', String(opt.protect));
+    fd.append('index_rate', String(opt.index));
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 300_000);
     let r = null;

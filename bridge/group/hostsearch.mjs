@@ -92,6 +92,50 @@ async function gsvAlive(url) {
 }
 
 let lastHealAt = 0;
+let lastHardAt = 0;
+
+function sshHost(url) {
+  try {
+    const h = new URL(String(url)).hostname;
+    return h.startsWith('100.') ? h : '';
+  } catch { return ''; }
+}
+
+function sshRun(host, cmd, timeout = 25000) {
+  return new Promise((res) => {
+    execFile('ssh', [
+      '-i', process.env.VOICE_SSH_KEY || '/root/.ssh/zxz',
+      '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=8',
+      `${process.env.VOICE_SSH_USER || '18074'}@${host}`, cmd,
+    ], { timeout }, () => res());
+  });
+}
+
+/**
+ * 硬重启 GPT-SoVITS：进程还活着但 CUDA 上下文已经死了（2026-10-31 训练抢显存那次），
+ * 光 `schtasks /Run` 没用 —— 任务显示"正在运行"，端口也在监听，但 /tts 一律 500。
+ * 必须先按端口把进程杀掉再拉。
+ */
+async function gsvHardRestart(url, log = () => {}) {
+  if (Date.now() - lastHardAt < 180_000) return false;
+  const host = sshHost(url);
+  if (!host) return false;
+  lastHardAt = Date.now();
+  log('GPT-SoVITS 半死（端口在但不干活），硬重启');
+  await sshRun(host,
+    'powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 9880 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Start-Sleep 3; schtasks /Run /TN ' + HEAL_TASK + '"',
+    40000);
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 4000));
+    try {
+      const r = await fetch(String(url).replace(/\/+$/, '') + '/tts', { method: 'GET', signal: AbortSignal.timeout(4000) });
+      if (r.status < 500) { log('GPT-SoVITS 硬重启成功（' + ((i + 1) * 4) + 's）'); return true; }
+    } catch { /* 还没起来 */ }
+  }
+  log('GPT-SoVITS 硬重启失败');
+  return false;
+}
+
 async function ensureGsv(log = () => {}) {
   const url = gsvUrl();
   if (!url) return;
@@ -102,14 +146,7 @@ async function ensureGsv(log = () => {}) {
   if (!host.startsWith('100.')) return;               // 只对 tailnet 上的本地机器动手
   lastHealAt = Date.now();
   log('GPT-SoVITS 不通，尝试远端拉起');
-  await new Promise((res) => {
-    execFile('ssh', [
-      '-i', process.env.VOICE_SSH_KEY || '/root/.ssh/zxz',
-      '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=8',
-      `${process.env.VOICE_SSH_USER || '18074'}@${host}`,
-      `schtasks /Run /TN ${HEAL_TASK}`,
-    ], { timeout: 25000 }, () => res());
-  });
+  await sshRun(host, `schtasks /Run /TN ${HEAL_TASK}`);
   for (let i = 0; i < 15; i++) {
     await new Promise((r) => setTimeout(r, 3000));
     if (await gsvAlive(url)) { log('GPT-SoVITS 已拉起'); return; }
@@ -125,6 +162,13 @@ export async function hostSpeak(text, preset) {
   //   · edge+rvc 引擎一次 57 秒
   // 桥先超时 → 插件那头其实还在跑 → 用户看到「她说发不了语音」。
   // 语音是一次性等待，慢一点也比失败好；真挂了插件自己会回落 Edge。
-  await ensureGsv((m) => console.log(`  [voice] ${m}`));
-  return call('/voice', { text: t, preset }, 90000);
+  const log = (m) => console.log(`  [voice] ${m}`);
+  await ensureGsv(log);
+  let d = await call('/voice', { text: t, preset }, 90000);
+  if (d) return d;
+  // 走到这里说明插件那头合成失败（多半是本地 GPT-SoVITS 半死）—— 硬重启再来一次，
+  // 免得出门音色变成微软小艺。
+  const url = gsvUrl();
+  if (url && (await gsvHardRestart(url, log))) d = await call('/voice', { text: t, preset }, 90000);
+  return d;
 }
