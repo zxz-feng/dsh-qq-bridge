@@ -338,7 +338,7 @@ function fullMetaPath(bvid) { return `${VOICE_DIR}/${bvid}_full.json`; }
  * @returns {Promise<{ok:boolean, segments?:string[], title?:string, bvid?:string,
  *                    total?:number, count?:number, truncated?:boolean, cached?:boolean, reason?:string}>}
  */
-export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG } = {}) {
+export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG, onSegment = null } = {}) {
   gc();
   const { kw: rawKw, version } = splitVersion(query);
   const kw = rawKw.replace(/(完整版|整首|全曲|整首歌|完整)/g, ' ').replace(/\s+/g, ' ').trim();
@@ -363,7 +363,14 @@ export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG } = {}) {
       segs.push(p);
     }
     if (segs.length) {
-      const hers = await singSegments(segs);
+      const hers = [];
+      for (let i = 0; i < segs.length; i += 1) {
+        const her = await singRemoteTo(segs[i], segs[i].replace(/\.mp3$/, '_her.mp3'));
+        const p = her || segs[i];
+        hers.push(p);
+        if (her) console.log(`  [voice] 整首换声 ${i + 1}/${segs.length}`);
+        if (onSegment) await onSegment({ path: p, index: i, total: segs.length, sec: SEG_SEC });
+      }
       return {
         ok: true, segments: hers, her: hers.some((p, i) => p !== segs[i]),
         title: pick.title, bvid,
@@ -387,11 +394,18 @@ export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG } = {}) {
   const count = Math.min(need, Math.max(1, Number(maxSeg) || FULL_MAX_SEG));
 
   const segments = [];
+  const hers = [];
   try {
     for (let i = 0; i < count; i += 1) {
       const dst = `${VOICE_DIR}/${bvid}_full_${i}.mp3`;
       await cutSegment(src, dst, i * SEG_SEC, SEG_SEC);
       segments.push(dst);
+      // 换完这一段就立刻交出去，不等后面几段（主人 2026-10-31 要求）
+      const her = await singRemoteTo(dst, dst.replace(/\.mp3$/, '_her.mp3'));
+      const p = her || dst;
+      hers.push(p);
+      if (her) console.log(`  [voice] 整首换声 ${i + 1}/${count}`);
+      if (onSegment) await onSegment({ path: p, index: i, total: count, sec: SEG_SEC });
     }
   } catch (e) {
     return { ok: false, reason: '切段失败: ' + e.message };
@@ -402,8 +416,6 @@ export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG } = {}) {
   writeFileSync(fullMetaPath(bvid), JSON.stringify({
     total, count, truncated: need > count, segSec: SEG_SEC,
   }));
-
-  const hers = await singSegments(segments);
 
   return {
     ok: true, segments: hers, her: hers.some((p, i) => p !== segments[i]),

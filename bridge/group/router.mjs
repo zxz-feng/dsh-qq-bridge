@@ -728,7 +728,18 @@ async function runFullSong({ query }, { gid, uin, name, policy, callApi, evt }) 
   console.log(`  [group] 整首请求: ${q}`);
   await send(`${quote}整首有点长，我分段发`);
 
-  const r = await makeVoiceFull(q, { maxSeg: Number(policy.fullSongMaxSeg ?? 12) });
+  // 一段换完就发一段，别等全部合成完（主人 2026-10-31 要求）
+  let streamed = 0;
+  const onSegment = async (seg) => {
+    if (dry) { console.log(`  [dry-run] 会发第 ${seg.index + 1} 段: ${seg.path}`); streamed += 1; return; }
+    const rr = await callApi('send_group_msg', { group_id: Number(gid), message: recordCQ(seg.path) });
+    const ok = sendOk(rr);
+    if (ok) store.pushSentId(gid, rr?.data?.message_id);
+    streamed += 1;
+    console.log(`  [group] 第 ${seg.index + 1}/${seg.total} 段${ok ? '已发' : '发送失败'}（${seg.sec}s）`);
+    if (!ok) console.error('          ', JSON.stringify(rr).slice(0, 160));
+  };
+  const r = await makeVoiceFull(q, { maxSeg: Number(policy.fullSongMaxSeg ?? 12), onSegment });
   if (!r.ok) {
     await send(`没扒到（${r.reason}）`);
     audit(gid, { gid, uin, fullSong: q, ok: false, reason: r.reason });
@@ -737,7 +748,8 @@ async function runFullSong({ query }, { gid, uin, name, policy, callApi, evt }) 
 
   console.log(`  [group] 整首 ${r.total}s，分 ${r.count} 段${r.truncated ? '（截断）' : ''}`);
 
-  for (let i = 0; i < r.segments.length; i += 1) {
+  // 已经边换边发了就不再补发一遍；只有整段都没发出去（streamed=0）才走这里兜底
+  for (let i = 0; streamed === 0 && i < r.segments.length; i += 1) {
     if (dry) {
       console.log(`  [dry-run] 会发第 ${i + 1}/${r.count} 段`);
     } else {
