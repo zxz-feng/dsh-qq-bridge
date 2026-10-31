@@ -338,6 +338,11 @@ export async function handlePrivateMessage(evt, { callApi }) {
 }
 
 async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, hard = false }) {
+  // runSingleSong 要 uin/name，而 respond 的形参里没有它们 —— 只有 msg 带着。
+  // 以前这里直接引用外层变量，私聊里没有 uin 这个绑定 → 「uin is not defined」，
+  // 于是她说「歌给你放上了」但其实一首都没放（2026-10-31 实测）。
+  const uin = String(msg?.uin ?? evt?.user_id ?? '');
+  const name = String(msg?.name ?? '');
   const sil = commands.isSilenced(gid);
   if (sil) { console.log('  [group] 静默中，放弃这次回复'); return; }
 
@@ -413,7 +418,7 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   // 她的「我没嗓子/我发不了语音」是**自我实现的循环**：某次插件真失败 → 那句失败台词
   // 进了上下文 → 以后每次要语音，她都先说这句，然后这句被合成成语音发出去（2026-10-31 实测）。
   // 所以：这句话不许当语音内容，也不许当文字发出去。
-  const EXCUSE = /(发不了|发不出|说不了|不能发|没(有)?嗓子|不会(说|唱)|放不出|用不了语音|只能打字)/;
+  const EXCUSE = /(发不了|发不出|说不了|不能发|没(有)?嗓子|不会(说|唱)|放不出|用不了语音|只能打字|整不了|弄不了|搞不了|唱不了|做不到)/;
   const SPEAK_FALLBACK = ['听见了吧，我这么说行不行。', '在呢在呢，你听声音就知道。', '我说话你听着呢吧。'];
   const plainFallback = (seed) => SPEAK_FALLBACK[Math.abs([...String(seed)].reduce((a, c) => a + c.charCodeAt(0), 0)) % SPEAK_FALLBACK.length];
 
