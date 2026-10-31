@@ -114,6 +114,8 @@ const BAD_TITLE = [
   /reaction|Reaction|REACTION|直播|实况|解析|教程|教学|钢琴|吉他|谱|简谱|翻弹|指弹|舞蹈|翻跳/,
   // 解说/科普/冷知识：标题里挂着歌名但根本不是歌（2026-10-31 搜《雨爱》冒出来的）
   /你真的知道|你知道吗|冷知识|科普|背后的故事|揭秘|盘点向|为什么叫/,
+  // 游戏/整活/混剪：搜《大鱼》冒出「宇宙版"大鱼吃小鱼"？」（2026-10-31）
+  /游戏|解说|宇宙版|鬼畜|整活|沙雕|混剪|影视|电影解说|综艺|花絮|片段|名场面/,
   // 话题类（"抄袭届""网友评价""XX你怎么看"）
   /搞笑|沙雕|鬼畜|整活|吐槽|锐评|科普|新闻|评测|评价|怎么看|回应|抄袭|裁子|争议|塌房|翻车|瓜/,
   /夹子音|名场面|挑战|唱功|听听|试听|实力|开口跪|封神|现场|live|Live|LIVE|演唱会|翻唱|cover|Cover/,
@@ -337,10 +339,17 @@ export async function pickSongVideo(query, { title = '', version = '' } = {}) {
   const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const exactRe = new RegExp(`《\\s*${esc}\\s*》\\s*[-—–]`);
   const upExact = upScored.find((x) => exactRe.test(String(x.v.title)));
+  // 搬运号把歌名用《》括起来、而站内那条没有 → 说明站内匹配的是「沾边词」（大鱼吃小鱼），采信搬运号
+  const bracketRe = new RegExp(`《\\s*${esc}\\s*》`);
+  const upBracket = upScored.find((x) => bracketRe.test(String(x.v.title))
+    && !COVER_TITLE.some((re) => re.test(String(x.v.title))));
   const looksCover = best.score < 14 || COVER_TITLE.some((re) => re.test(String(best.v.title)));
   if (upExact) {
     console.log(`  [voice] 搬运号命中《${kw}》→ ${upExact.v.bvid}《${upExact.v.title.slice(0, 30)}》`);
     best = upExact;
+  } else if (upBracket && !bracketRe.test(String(best.v.title))) {
+    console.log(`  [voice] 站内没把《${kw}》当歌名，搬运号括起来了 → 采信 ${upBracket.v.bvid}`);
+    best = upBracket;
   } else if (looksCover && upBest && upBest.score > best.score) {
     console.log(`  [voice] 站内不像原曲 → 搬运号命中 ${upBest.v.bvid}《${upBest.v.title.slice(0, 30)}》`);
     best = upBest;
