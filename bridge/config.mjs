@@ -16,6 +16,8 @@ import { join } from 'node:path'
 import { readJson, writeJson } from '../lib/home.mjs'
 
 export const DEFAULTS = {
+  // 她自己的 QQ 号：群里「@我」靠它判定硬触发，少了这个 @ 会被当普通消息
+  selfQQ: '',
   enabled: true,
   onebot: { url: 'ws://127.0.0.1:3001', token: '' },
   mode: 'auto',
@@ -114,6 +116,7 @@ export function normalize(raw = {}) {
       token: str(r.onebot?.token, '', 200),
     },
     mode: ['auto', 'draft', 'confirm', 'off'].includes(r.mode) ? r.mode : d.mode,
+    selfQQ: str(r.selfQQ, '', 20),
     media: { dir: str(r.media?.dir, '', 400), cqDir: str(r.media?.cqDir, '', 400) },
     python: {
       bili: str(r.python?.bili, '', 400),
@@ -272,6 +275,7 @@ export function envFor(cfg, home) {
     // 不在这里重复一份配置，免得两处不一致
     ...singEnv(),
   }
+  if (cfg.selfQQ) env.SELF_QQ = String(cfg.selfQQ)
   if (cfg.media.dir) env.MEDIA_DIR = cfg.media.dir
   if (cfg.media.cqDir) env.CQ_MEDIA = cfg.media.cqDir
   if (cfg.python.bili) env.BILI_PY = cfg.python.bili

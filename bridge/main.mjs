@@ -29,7 +29,7 @@ let cfg = loadConfig(HOME)
 const env = envFor(cfg, HOME)
 env.MEDIA_DIR = env.MEDIA_DIR || join(HOME, 'media')
 Object.assign(process.env, env)   // 让后面 import 的 group/* 也看到同一套目录
-console.log(`媒体目录 ${process.env.MEDIA_DIR} → 容器 ${process.env.CQ_MEDIA || '/app/napcat/config/media'}`)
+console.log(`媒体目录 ${process.env.MEDIA_DIR} → 容器 ${process.env.CQ_MEDIA || '/app/napcat/config/media'}；SELF_QQ=${process.env.SELF_QQ || '(空！群里@不算点名)'}`)
 for (const [k, v] of Object.entries(env)) {
   if (v !== undefined && v !== null && v !== '') process.env[k] = String(v)
 }
