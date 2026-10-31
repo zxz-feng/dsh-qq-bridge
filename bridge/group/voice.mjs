@@ -93,6 +93,44 @@ function singUrl() {
  * 没配 SING_URL、或者本地没开 → 返回 null，调用方就放原曲，绝不因此不发语音
  * 缓存：同 BV 同段长只换一次
  */
+let lastRvcHealAt = 0;
+
+/**
+ * 换声服务连不上就硬重启一次（按端口杀 + schtasks 拉），最多 80 秒。
+ * 2026-10-31 21:26：5050 崩了 → 整首回落成周深原唱，主人以为"她没唱"。
+ */
+async function healRvc(url) {
+  if (Date.now() - lastRvcHealAt < 120_000) return false;
+  let host = '';
+  try {
+    host = new URL(String(url)).hostname;
+  } catch { return false; }
+  if (!host.startsWith('100.')) return false;
+  lastRvcHealAt = Date.now();
+  const port = (() => { try { return new URL(String(url)).port || '5050'; } catch { return '5050'; } })();
+  console.log(`  [voice] 换声服务连不上，硬重启 ${host}:${port}`);
+  const { execFile } = await import('node:child_process');
+  await new Promise((res) => {
+    execFile('ssh', [
+      '-i', process.env.VOICE_SSH_KEY || '/root/.ssh/zxz',
+      '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=8',
+      `${process.env.VOICE_SSH_USER || '18074'}@${host}`,
+      'powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort ' + port
+        + ' -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; '
+        + 'Start-Sleep 3; schtasks /Run /TN RVC-Serve"',
+    ], { timeout: 40000 }, () => res());
+  });
+  for (let i = 0; i < 16; i += 1) {
+    await new Promise((r) => setTimeout(r, 5000));
+    try {
+      const h = await fetch(url.replace(/\/+$/, '') + '/health', { signal: AbortSignal.timeout(4000) });
+      if (h.ok) { console.log('  [voice] 换声服务已拉起'); return true; }
+    } catch { /* 还在起 */ }
+  }
+  console.log('  [voice] 换声服务拉不起来，这轮放原曲');
+  return false;
+}
+
 async function singRemoteTo(file, out) {
   const url = singUrl();
   if (!url) return null;
@@ -129,6 +167,14 @@ async function singRemoteTo(file, out) {
       }
     }
     clearTimeout(timer);
+    if (!r) {
+      // 连不上：可能是 5050 那头崩了（训练抢显存那次就是）。硬重启一次再试。
+      if (await healRvc(url)) {
+        try {
+          r = await fetch(url.replace(/\/+$/, '') + '/sing', { method: 'POST', body: fd, signal: ctrl.signal });
+        } catch (e) { lastErr = e; }
+      }
+    }
     if (!r) throw lastErr || new Error('连接不上换声服务');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const blob = Buffer.from(await r.arrayBuffer());
@@ -363,18 +409,27 @@ function fullMetaPath(bvid) { return `${VOICE_DIR}/${bvid}_full.json`; }
  * @returns {Promise<{ok:boolean, segments?:string[], title?:string, bvid?:string,
  *                    total?:number, count?:number, truncated?:boolean, cached?:boolean, reason?:string}>}
  */
-export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG, onSegment = null } = {}) {
+export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG, onSegment = null, pick: forced = null } = {}) {
   gc();
   const { kw: rawKw, version } = splitVersion(query);
   const kw = rawKw.replace(/(完整版|整首|全曲|整首歌|完整)/g, ' ').replace(/\s+/g, ' ').trim();
   if (!kw) return { ok: false, reason: '没听清要什么' };
 
-  const sel = await pickSongVideo(kw, { title: kw, version });
-  if (!sel.ok) return { ok: false, reason: sel.reason };
-  const pick = sel.pick;
+  // 主人已经确认过曲目时直接用那个，不再重选（重选可能选出另一首）
+  let pick;
+  let why;
+  if (forced) {
+    pick = forced;
+    why = ['已确认'];
+  } else {
+    const sel = await pickSongVideo(kw, { title: kw, version });
+    if (!sel.ok) return { ok: false, reason: sel.reason };
+    pick = sel.pick;
+    why = sel.why ?? [];
+  }
   const bvid = pick.bvid;
   console.log(`  [voice] 整首选中 ${bvid}「${String(pick.title).slice(0, 36)}」`
-    + ` ${pick.duration} | ${(sel.why ?? []).join('、')}`);
+    + ` ${pick.duration} | ${why.join('、')}`);
 
   // 缓存命中
   const meta = (() => {

@@ -146,9 +146,16 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
     if (Date.now() - pend.at > 10 * 60 * 1000) pendingSing.delete(pkey);
     else if (/^(唱|对|是|嗯|好|可以|行|就这个|没错|开始)/.test(text)) {
       pendingSing.delete(pkey);
-      console.log(`  [group] 主人确认了：${pend.pick.title.slice(0, 26)} → 开唱`);
-      await runSingleSong({ query: pend.query, pick: pend.pick, quiet: true },
-        { gid, uin, name, policy, callApi, evt });
+      const wantFull = /完整版|整首|全曲|一整首|整个|全部/.test(text);
+      console.log(`  [group] 主人确认了：${pend.pick.title.slice(0, 26)} → ${wantFull ? '整首开唱' : '开唱'}`);
+      if (wantFull) {
+        // 注意：整首不能重新选曲，必须用刚确认过的那一首（重选会跳歌）
+        await runFullSong({ query: pend.query, pick: pend.pick },
+          { gid, uin, name, policy, callApi, evt });
+      } else {
+        await runSingleSong({ query: pend.query, pick: pend.pick, quiet: true },
+          { gid, uin, name, policy, callApi, evt });
+      }
       return;
     } else if (/^(不|别|换|错|不是|不对)/.test(text)) {
       pendingSing.delete(pkey);
@@ -705,7 +712,7 @@ function cleanTitle(t, query = '') {
  * 整首分段发送
  * QQ 单条语音上限 60 秒，所以整首拆成多段（默认每段 59 秒，最多 6 段）。
  */
-async function runFullSong({ query }, { gid, uin, name, policy, callApi, evt }) {
+async function runFullSong({ query, pick = null }, { gid, uin, name, policy, callApi, evt }) {
   const dry = policy.dryRun !== false;
   const quote = evt?.message_id ? `[CQ:reply,id=${evt.message_id}]` : '';
   const send = async (body) => {
@@ -739,7 +746,7 @@ async function runFullSong({ query }, { gid, uin, name, policy, callApi, evt }) 
     console.log(`  [group] 第 ${seg.index + 1}/${seg.total} 段${ok ? '已发' : '发送失败'}（${seg.sec}s）`);
     if (!ok) console.error('          ', JSON.stringify(rr).slice(0, 160));
   };
-  const r = await makeVoiceFull(q, { maxSeg: Number(policy.fullSongMaxSeg ?? 12), onSegment });
+  const r = await makeVoiceFull(q, { maxSeg: Number(policy.fullSongMaxSeg ?? 12), onSegment, pick });
   if (!r.ok) {
     await send(`没扒到（${r.reason}）`);
     audit(gid, { gid, uin, fullSong: q, ok: false, reason: r.reason });
