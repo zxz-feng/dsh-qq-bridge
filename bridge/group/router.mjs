@@ -492,6 +492,17 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     console.log('  [group] 拦掉了「发不了语音」那类自毁台词');
   }
 
+  // 用户点名了「司凤版」这种版本，她却替流程先下结论（「司凤版没有」）：
+  // 实际 00:01 那轮搜到了「雨爱 (司凤版)」2:20，是下载 412 失败。
+  // 别让她凭印象否定，换成「行，我找找」，让流程自己给答案。
+  const verAsked = ((msg.text || '').match(/[\u4e00-\u9fa5A-Za-z]{1,6}版/g) || [])
+    .some((w) => !/^(完整版|整版|全版|原版|正版)$/.test(w));
+  const DENY_VER = /(没有|没辙|找不到|唱不来|放不了|搜不到|整不了)/;
+  if (verAsked && !voiced && out.parts.some((x) => DENY_VER.test(x))) {
+    out.parts = out.parts.map((x) => (DENY_VER.test(x) ? '行，我找找' : x));
+    console.log('  [group] 拦掉了「这个版本没有」的提前否定');
+  }
+
   for (let i = 0; i < (voiced ? 0 : out.parts.length); i += 1) {
     const body = (i === 0 ? quote : '') + out.parts[i];
     if (dry) {

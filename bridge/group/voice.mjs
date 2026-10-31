@@ -30,6 +30,8 @@ if (!existsSync(VOICE_DIR)) mkdirSync(VOICE_DIR, { recursive: true });
 //   CRED_FILE  B站登录态（有登录才能拿到高清音轨）
 // 没配也照常跑，只是「点歌/唱歌」这块会明确报「没装就不可用」。
 const PY_ASR = process.env.BILI_PY_ASR || '';
+const BILI_PY = process.env.BILI_PY || '';
+const BILI_TOOL = fileURLToPath(new URL('../tools/bili.py', import.meta.url));
 const CRED_FILE = process.env.BILI_CRED || '';
 
 // 从**开头**切，不挖中间那段；时长按 QQ 语音上限留 1 秒余量
@@ -269,11 +271,37 @@ async function downloadAudio(bvid, { head = false } = {}) {
   try {
     await exec(PY_ASR, args, { timeout: 120000, maxBuffer: 4 * 1024 * 1024 });
   } catch (e) {
-    throw new Error(safeErr(e, '下载失败'));
+    // B站网页会风控（HTTP 412），yt-dlp 第一步就挂。
+    // 走 API 拿音频直链（有 WBI 签名，不受 412 影响），再用 ffmpeg 拉流。
+    console.log(`  [voice] yt-dlp 失败（${safeErr(e, '下载失败')}）→ 改走 API 直链`);
+    try {
+      await downloadByApi(bvid, `${VOICE_DIR}/${bvid}${tag}.mp3`, { head });
+    } catch (e2) {
+      throw new Error(safeErr(e2, '下载失败'));
+    }
+    return `${VOICE_DIR}/${bvid}${tag}.mp3`;
   }
   const found = readdirSync(VOICE_DIR).find((f) => f.startsWith(`${bvid}${tag}.`));
   if (!found) throw new Error('下载后找不到文件');
   return `${VOICE_DIR}/${found}`;
+}
+
+/**
+ * 用 bili.py 的 dlurl 拿直链，再用 ffmpeg 拉音频。
+ * ffmpeg 必须带 Referer（B站 CDN 会 403），UA 也一起给。
+ */
+async function downloadByApi(bvid, dst, { head = false } = {}) {
+  const { stdout } = await exec(BILI_PY, [BILI_TOOL, 'dlurl', bvid], { timeout: 30000, maxBuffer: 2 * 1024 * 1024 });
+  const j = JSON.parse(String(stdout || '{}'));
+  if (!j.ok || !j.urls?.length) throw new Error('API 没给直链');
+  const ffArgs = [
+    '-y', '-loglevel', 'error',
+    '-headers', 'Referer: https://www.bilibili.com/\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0\r\n',
+    '-i', j.urls[0].url, '-vn',
+  ];
+  if (head) ffArgs.push('-t', '70');
+  ffArgs.push('-c:a', 'libmp3lame', '-b:a', '192k', dst);
+  await exec('ffmpeg', ffArgs, { timeout: 180000, maxBuffer: 4 * 1024 * 1024 });
 }
 
 /** 用 ffprobe 取音频总时长（秒） */

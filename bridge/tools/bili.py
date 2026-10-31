@@ -144,6 +144,31 @@ async def cmd_info(bvid):
     }
 
 
+async def cmd_dlurl(bvid):
+    """拿音频直链（走 API，不抓网页）。
+
+    2026-11-01：B站网页对这台机器返回 412（风控），yt-dlp 第一步「Downloading webpage」
+    就挂，整首歌点不出来。API 有 WBI 签名，不受这个限制。
+    返回 dash 里的 audio（按带宽从高到低），给 ffmpeg 直接读。
+    """
+    from bilibili_api import video, Credential
+
+    v = video.Video(bvid, credential=load_cred())
+    r = await v.get_download_url(0)
+    urls = []
+    dash = r.get("dash") or {}
+    for a in sorted(dash.get("audio") or [], key=lambda x: x.get("bandwidth", 0), reverse=True):
+        for u in [a.get("base_url")] + list(a.get("backup_url") or []):
+            if u:
+                urls.append({"url": u, "bandwidth": a.get("bandwidth", 0), "mime": a.get("mime_type", "")})
+    for d in r.get("durl") or []:
+        urls.append({"url": d.get("url", ""), "bandwidth": 0, "mime": "durl"})
+    urls = [u for u in urls if u["url"]]
+    if not urls:
+        return {"ok": False, "error": "no audio url"}
+    return {"ok": True, "urls": urls[:4]}
+
+
 async def cmd_danmaku(bvid, num=300):
     """取弹幕时间点，用来找"弹幕最密"的高潮段（切歌用）"""
     cred = load_cred()
@@ -178,6 +203,8 @@ def main():
                                         int(sys.argv[4]) if len(sys.argv) > 4 else 3))
         elif cmd == 'hot':
             out = asyncio.run(cmd_hot())
+        elif cmd == 'dlurl':
+            out = asyncio.run(cmd_dlurl(sys.argv[2]))
         elif cmd == 'info':
             out = asyncio.run(cmd_info(sys.argv[2]))
         elif cmd == 'danmaku':
