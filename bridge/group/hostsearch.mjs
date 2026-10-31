@@ -72,6 +72,10 @@ export async function hostFetch(url) {
 export async function hostSpeak(text, preset) {
   const t = String(text ?? '').trim();
   if (!t) return null;
-  // 25 秒：真跑 RVC 转换一次约 6 秒，冷启动可能十几秒；12 秒会把正常转换也掐断
-  return call('/voice', { text: t, preset }, 25000);
+  // 90 秒。原来的 25 秒是照「RVC 一次 6 秒」定的，但实测过：
+  //   · 本地机器刚唤醒，GPT-SoVITS 要重新加载模型 → 单次 30 秒以上很正常
+  //   · edge+rvc 引擎一次 57 秒
+  // 桥先超时 → 插件那头其实还在跑 → 用户看到「她说发不了语音」。
+  // 语音是一次性等待，慢一点也比失败好；真挂了插件自己会回落 Edge。
+  return call('/voice', { text: t, preset }, 90000);
 }
