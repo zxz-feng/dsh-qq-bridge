@@ -234,12 +234,16 @@ async function cutSegment(src, dst, startSec, durSec) {
  * @returns {Promise<{ok:boolean, path?:string, title?:string, bvid?:string, sec?:number, reason?:string}>}
  */
 /** 「女版/男版」这类版本词单独拎出来，不当歌名的一部分 */
-function splitVersion(s) {
+export function splitVersion(s) {
   const t = String(s ?? '');
   const female = /女版|女生版|女声版|女声|女的唱/.test(t);
   const male = /男版|男生版|男声版/.test(t);
   const kw = t.replace(/女版|女生版|女声版|女声|女的唱|男版|男生版|男声版/g, ' ')
-    .replace(/[《》""'']/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+    .replace(/[《》""'']/g, ' ')
+    .replace(/\s+/g, ' ')
+    // 「女版的忘情牛肉面」剥掉「女版」会剩个「的」，再清一次首尾虚词
+    .replace(/^[的版\s、,，。]+|[的版\s、,，。]+$/g, '')
+    .trim().slice(0, 40);
   return { kw, version: female ? 'female' : male ? 'male' : '' };
 }
 
@@ -262,7 +266,7 @@ export async function makeVoice(query) {
     const herCached = await singRemote(cachePath(bvid), bvid);
     return {
       ok: true, path: herCached || cachePath(bvid), her: !!herCached, title: pick.title, bvid,
-      label: String(kw).slice(0, 16), sec: SEG_SEC, cached: true,
+      label: (version ? '女版的' : '') + String(kw).slice(0, 16), sec: SEG_SEC, cached: true,
     };
   }
 
@@ -293,7 +297,7 @@ export async function makeVoice(query) {
 
   return {
     ok: true, path: her || cachePath(bvid), her: !!her, title: pick.title, bvid,
-    label: String(kw).slice(0, 16), sec: dur, start, size, cached: false,
+    label: (version ? '女版的' : '') + String(kw).slice(0, 16), sec: dur, start, size, cached: false,
   };
 }
 
