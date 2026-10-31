@@ -162,6 +162,25 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
       console.log('  [group] 主人说不是这首 → 清掉待确认，等他说歌名');
     }
   }
+  // 固定点歌格式：唱《雨爱（司凤版）》的完整版
+  // 书名号里是歌名，「（…）」是版本，书名号后面跟「完整版/整首」才整首。
+  // 起因：2026-11-01 连点三次都得等模型自己想起发 [[sing:]]，它有时只说
+  // 「行，我找找」就没了 —— 这么明确的格式不该再过模型。
+  const fmtSong = text.match(/^(?:唱|来|放)\s*《([^》]{1,30})》\s*(?:的)?\s*(完整版|整首|全曲)?/);
+  if (fmtSong) {
+    let song = fmtSong[1].trim();
+    let ver = '';
+    const inner = song.match(/^(.{1,24}?)[（(]\s*([^）)]{1,12})\s*[）)]$/);
+    if (inner) { song = inner[1].trim(); ver = inner[2].trim(); }
+    if (song) {
+      const vWord = ver.replace(/版$/, '');
+      const query = vWord ? `${vWord}版${song}` : song;
+      console.log(`  [group] 固定格式点歌：《${song}》${ver ? `（${ver}版）` : ''}${fmtSong[2] ? ` ${fmtSong[2]}` : ' 59 秒'}`);
+      await runSingleSong({ query, raw: text, quiet: true }, { gid, uin, name, policy, callApi, evt });
+      return;
+    }
+  }
+
   if (/^\[markdown\]/.test(text)) return;
   if (!text && !parsed.images?.length) return;
 
