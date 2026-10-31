@@ -166,7 +166,7 @@ const GOOD_TITLE = [
  * @param {string} query  用户点的歌名
  * @param {number} expect 这首歌大概多长（秒，0=不知道）
  */
-export function scoreVideo(v, query, expect = 0, artist = '') {
+export function scoreVideo(v, query, expect = 0, artist = '', { allowCover = false } = {}) {
   const title = String(v.title ?? '');
   const dur = parseDur(v.duration);
   let s = 0;
@@ -221,7 +221,8 @@ export function scoreVideo(v, query, expect = 0, artist = '') {
   }
   // ②b 翻唱/改编/特殊版本：重量级扣分，别让「【林俊杰】-《起风了》-最燃高音版」冒充原曲
   for (const re of COVER_TITLE) {
-    if (re.test(title)) { s -= 14; why.push('像翻唱/改编/特殊版本'); break; }
+    // 主人明确要「司凤版」「钢琴版」这种时，翻唱词是**命中特征**，不是噪声
+    if (re.test(title)) { if (allowCover) { why.push('要的就是这个版本'); } else { s -= 14; why.push('像翻唱/改编/特殊版本'); } break; }
   }
   // ②c 标题里挂着别人的名字（【林俊杰】），而点歌人没提这个人 → 多半是翻唱
   const bracket = title.match(/【([^】]{2,10})】/) || title.match(/\[([^\]]{2,10})\]/)
@@ -275,7 +276,10 @@ export async function pickSongVideo(query, { title = '', version = '' } = {}) {
   if (!kw) return { ok: false, reason: '没听清歌名' };
 
   // 要「女版」时把版本词带进搜索词；搬运号里只有原唱，这时不去翻
-  const skw = version === 'female' ? `${kw} 女声版` : version === 'male' ? `${kw} 男声版` : kw;
+  const custom = version && version !== 'female' && version !== 'male' ? String(version) : '';
+  const skw = version === 'female' ? `${kw} 女声版`
+    : version === 'male' ? `${kw} 男声版`
+    : custom ? `${kw} ${custom}版` : kw;
   // 要版本时同时搜「带版本词」和「原样」两份：前者命中就用，没命中退回后者
   // （像《雨爱》本来就是女声，加了「女声版」反而搜出奇怪的视频）
   const [vids, plainVids, ups] = await Promise.all([
@@ -295,6 +299,7 @@ export async function pickSongVideo(query, { title = '', version = '' } = {}) {
   const verAdjust = (v) => {
     if (!version) return 0;
     const t = String(v.title);
+    if (custom) return t.includes(custom) ? 10 : -6;
     if (version === 'female') {
       if (/女声|女版|女生版|女声翻唱|翻唱|女key|女调/.test(t)) return 8;
       // 只惩罚「明确是男声」的；原唱本身可能就是女声（《雨爱》杨丞琳），别一刀切
@@ -307,7 +312,7 @@ export async function pickSongVideo(query, { title = '', version = '' } = {}) {
     return 0;
   };
   const scoreOne = (v) => {
-    const r = scoreVideo(v, kw, expect, probed.artist);
+    const r = scoreVideo(v, kw, expect, probed.artist, { allowCover: Boolean(custom) });
     const adj = verAdjust(v);
     return { v, score: r.score + adj, why: adj ? [...r.why, adj > 0 ? '版本对得上' : '版本不对'] : r.why };
   };

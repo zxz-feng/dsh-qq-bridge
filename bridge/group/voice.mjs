@@ -315,13 +315,22 @@ export function splitVersion(s) {
   const t = String(s ?? '');
   const female = /女版|女生版|女声版|女声|女的唱/.test(t);
   const male = /男版|男生版|男声版/.test(t);
+  // 「司凤版雨爱」「周深版」——除了男女声，任何「X版」都是版本要求。
+  // 2026-10-31 主人点「唱完整版的司凤版雨爱」，版本词被剥掉后按普通《雨爱》选中原唱，
+  // 她还以为模型听不懂人话。
+  const namedRaw = (t.replace(/完整版|整首|全曲|整个版?/g, ' ').match(/([\u4e00-\u9fa5A-Za-z]{1,6})版/) || [])[1] || '';
+  // 正则会把「的」一起吃进去（完整版的司凤版 → 的司凤），剔掉
+  const named = namedRaw.replace(/^[的个了和与\s]+/, '');
+  const flavor = named && !/^(女|男|女声|男声|女生|男生)$/.test(named) ? named : '';
   const kw = t.replace(/女版|女生版|女声版|女声|女的唱|男版|男生版|男声版/g, ' ')
+    .replace(/完整版|整首|全曲/g, ' ')
+    .replace(flavor ? new RegExp(`${flavor}版`, 'g') : /(?!)/, ' ')
     .replace(/[《》""'']/g, ' ')
     .replace(/\s+/g, ' ')
     // 「女版的忘情牛肉面」剥掉「女版」会剩个「的」，再清一次首尾虚词
     .replace(/^[的版\s、,，。]+|[的版\s、,，。]+$/g, '')
     .trim().slice(0, 40);
-  return { kw, version: female ? 'female' : male ? 'male' : '' };
+  return { kw, version: female ? 'female' : male ? 'male' : flavor, flavor };
 }
 
 /**
