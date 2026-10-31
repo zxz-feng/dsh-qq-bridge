@@ -410,12 +410,20 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     '说(两|几)句|说得?长一?点|说长',
     '你倒是(说|用)',
   ].join('|'), 'i');
+  // 她的「我没嗓子/我发不了语音」是**自我实现的循环**：某次插件真失败 → 那句失败台词
+  // 进了上下文 → 以后每次要语音，她都先说这句，然后这句被合成成语音发出去（2026-10-31 实测）。
+  // 所以：这句话不许当语音内容，也不许当文字发出去。
+  const EXCUSE = /(发不了|发不出|说不了|不能发|没(有)?嗓子|不会(说|唱)|放不出|用不了语音|只能打字)/;
+  const SPEAK_FALLBACK = ['听见了吧，我这么说行不行。', '在呢在呢，你听声音就知道。', '我说话你听着呢吧。'];
+  const plainFallback = (seed) => SPEAK_FALLBACK[Math.abs([...String(seed)].reduce((a, c) => a + c.charCodeAt(0), 0)) % SPEAK_FALLBACK.length];
+
   const wantVoice = VOICE_HINT.test(msg.text || '');
   let voiced = false;
   if (wantVoice) {
     // 有明确原话（引号 / 「内容是…」）就用原话；否则说模型自己写的那句 ——
     // 它写的一般比从请求里抠出来的碎片更像人话，也更长（主人嫌过太短）。
-    const spoken = spokenPayload(msg.text) || out.parts.join('，').replace(/\s+/g, ' ').trim();
+    const spoken0 = spokenPayload(msg.text) || out.parts.join('，').replace(/\s+/g, ' ').trim();
+    const spoken = EXCUSE.test(spoken0) ? plainFallback(msg.text) : spoken0;
     const v = await hostSpeak(spoken, policy.voicePreset);
     if (v?.path) {
       console.log(`  [group] 语音合成成功（${v.ms}ms${v.cached ? '，命中缓存' : ''}）`);
@@ -433,6 +441,12 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     } else {
       console.log('  [group] 语音没合成出来（没装 dsh-voice / 合成超时 / RVC 未连上）→ 退回文字');
     }
+  }
+
+  if (!voiced && out.parts.some((x) => EXCUSE.test(x))) {
+    const kept = out.parts.filter((x) => !EXCUSE.test(x));
+    out.parts = kept.length ? kept : [plainFallback(msg.text)];
+    console.log('  [group] 拦掉了「发不了语音」那类自毁台词');
   }
 
   for (let i = 0; i < (voiced ? 0 : out.parts.length); i += 1) {
