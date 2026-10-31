@@ -485,23 +485,32 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     const promisesSing = /(唱|哼).{0,4}(首|个|段|一下)|这就唱|这就来|来一首/.test(out.parts.join(' '));
     if (promisesSing) console.log('  [group] ⚠️ 它答应了要唱但没给 [[sing:歌名]] —— 不会发音频');
   }
-  if (false) {
+  // 她自己想出声（[[voice:要念的话]]）：以前这里写死 if (false)，一律丢掉。
+  // 结果就是「只有人明说要语音，她才有嗓子」，还学会了拿嗓子自嘲。
+  // 2026-10-31 放开：2~40 字 → 掷骰子（默认 45%）→ 每天上限内就真发。
+  if (!voiced && out.voices.length) {
+    const say = String(out.voices[0]).replace(/\s+/g, ' ').trim().slice(0, 40);
     const used = store.loadStats(gid).voice ?? 0;
-    if (used < Number(policy.voicePerDay ?? 3)) {
-      console.log(`  [group] 准备语音: ${out.voices[0]}`);
-      const v = await makeVoice(out.voices[0]);
-      if (v.ok) {
-        if (dry) console.log(`  [dry-run] 会发语音: ${v.title}（${v.sec}s）`);
-        else {
-          const r = await callApi('send_group_msg', { group_id: Number(gid), message: recordCQ(v.path) });
-          const ok = sendOk(r);
-          console.log(`  [group] 语音${ok ? '已发' : '发送失败'}（${v.sec}s）`);
-          if (!ok) console.error('          ', JSON.stringify(r).slice(0, 200));
-        }
-        store.bumpStat(gid, 'voice');
-        store.setLastSong(gid, out.voices[0]);   // 之后用户只说"完整版"也能接上
+    const cap = Number(policy.voicePerDay ?? 12);
+    const prob = Number(policy.voiceProb ?? 0.45);
+    if (say.length < 2) {
+      console.log('  [group] 语音文本太短，跳过');
+    } else if (used >= cap) {
+      console.log(`  [group] 今天语音已发 ${used}/${cap}，这条只发文字`);
+    } else if (!dry && Math.random() > prob) {
+      console.log(`  [group] 想发语音「${say}」→ 掷骰子没中（${Math.round(prob * 100)}%），只发文字`);
+    } else {
+      const v = await hostSpeak(say, policy.voicePreset);
+      if (!v?.path) {
+        console.log('  [group] 语音没合成出来（语音插件/RVC 未连上）→ 只发文字');
+      } else if (dry) {
+        console.log(`  [dry-run] 会自主发语音「${say}」（${v.ms}ms）`);
       } else {
-        console.log(`  [group] 语音没做成: ${v.reason}`);
+        const r = await callApi('send_group_msg', { group_id: Number(gid), message: recordCQ(stage(v.path, 'voice')) });
+        const ok = sendOk(r);
+        console.log(`  [group] 自主语音${ok ? '已发' : '发送失败'}「${say}」`);
+        if (!ok) console.error('          ', JSON.stringify(r).slice(0, 200));
+        if (ok) { store.pushSentId(gid, r?.data?.message_id); store.bumpStat(gid, 'voice'); }
       }
     }
   }

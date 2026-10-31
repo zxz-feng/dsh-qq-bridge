@@ -66,6 +66,8 @@ export const EMPTY_GROUP_CFG = {
     dailyActive: 3,
     dailyTotal: 100,
     voicePerDay: 20,
+    // 她自己想出声时的放行概率（[[voice:]] 只有掷中了才真发）
+    voiceProb: 0.45,
     fullSongPerDay: 5,
     fullSongMaxSeg: 12,
     searchPerDay: 20,
