@@ -414,6 +414,10 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     '再(说|来|念)(一)?(句|段|点|遍)',   // 「再说一句」算；「再说吧」不算
     '说(两|几)句|说得?长一?点|说长',
     '你倒是(说|用)',
+    // 2026-10-31 漏掉：主人直接递台词 —— 「说：“博士，这些是我从雷姆必拓带回来的伴手礼……”」
+    // 这种没有"语音/声音"字样，但是最明确的"用嘴念出来"。
+    "(说|念|读)\\s*[：:]\\s*[“\"「『]",
+    '^\\s*(说|念|读)\\s*[：:]',
   ].join('|'), 'i');
   // 她的「我没嗓子/我发不了语音」是**自我实现的循环**：某次插件真失败 → 那句失败台词
   // 进了上下文 → 以后每次要语音，她都先说这句，然后这句被合成成语音发出去（2026-10-31 实测）。
@@ -423,6 +427,13 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   const plainFallback = (seed) => SPEAK_FALLBACK[Math.abs([...String(seed)].reduce((a, c) => a + c.charCodeAt(0), 0)) % SPEAK_FALLBACK.length];
 
   const wantVoice = VOICE_HINT.test(msg.text || '');
+  // 兜底：只要模型回的是"我没嗓子/发不了"，无论要不要语音都换掉 ——
+  // 这句话一旦发出去就进了上下文，下次她更信自己没嗓子（自我实现）。
+  if (EXCUSE.test(out.parts.join(''))) {
+    const fix = plainFallback(msg.text);
+    out.parts = [fix];
+    console.log('  [group] 拦下"我没嗓子"台词 → 换成', fix);
+  }
   let voiced = false;
   if (wantVoice) {
     // 有明确原话（引号 / 「内容是…」）就用原话；否则说模型自己写的那句 ——
