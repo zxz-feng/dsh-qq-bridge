@@ -347,8 +347,13 @@ export function parseSong(text, { addressed = false } = {}) {
     if (q && !NOT_SONG.test(q)) return { query: q, full };
   }
 
+  // 「那你唱首X」「嗯你唱X」——句首的语气词/称呼会把动词顶离行首，先剥掉再匹配。
+  // 2026-10-31 实测：「那你唱首忘情牛肉面」整句没进点歌流程，她回了句「在呢在呢，你听声音就知道」。
+  const lead = body.replace(/^(那|那么|嗯|啊|诶|唉|哎|好|行|可以|你|您|就|快|赶紧|现在|给我|帮我|麻烦|对了|话说)+/, '').trim();
+  const verbBody = lead || body;
+
   // ① 明确的点歌动词：唱 / 来一首 / 放首歌 / 点歌 / 放一首 …
-  const explicit = body.match(/^(唱一下|唱下|唱|来一首|来一段|来首|来点|放首歌|放个歌|放一首|放首|放一下|点歌)\s*(?:个|一首|首|一段|一下|点)?\s*(.*)$/);
+  const explicit = verbBody.match(/^(唱一下|唱下|唱|来一首|来一段|来首|来点|放首歌|放个歌|放一首|放首|放一下|点歌)\s*(?:个|一首|首|一段|一下|点)?\s*(.*)$/);
   if (explicit) {
     const q = (explicit[2] ?? '').trim();
     if (!q) return full ? { query: '', full: true } : null;
@@ -357,7 +362,7 @@ export function parseSong(text, { addressed = false } = {}) {
   }
 
   // ② 光秃秃一个"放"：只有被叫到才算
-  const loose = body.match(/^放\s*(?:个|一首|首|一段|一下)?\s*(.*)$/);
+  const loose = verbBody.match(/^放\s*(?:个|一首|首|一段|一下)?\s*(.*)$/);
   if (loose && addressed) {
     const q = (loose[1] ?? '').trim();
     if (!q) return full ? { query: '', full: true } : null;
