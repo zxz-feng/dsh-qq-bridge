@@ -339,6 +339,14 @@ export function parseSong(text, { addressed = false } = {}) {
   // 先把"整首/完整版"这类词剥掉，剩下的才是歌名
   const body = t.replace(/(完整版|整首歌|整首|全曲)/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
+  // ⓪ 「歌名是X」「歌曲名：《X》」——最不含糊的一种说法，必须优先认出来。
+  // 2026-10-31 实测：「唱一首歌，歌名是人是猫」被当成闲聊 → 模型自己改唱《起风了》。
+  const named = body.match(/(?:歌名|歌曲名|曲名|歌的名字)\s*(?:是|叫|为|：|:)?\s*《?([^》\s，。！？]{1,20})》?/);
+  if (named?.[1]) {
+    const q = named[1].trim();
+    if (q && !NOT_SONG.test(q)) return { query: q, full };
+  }
+
   // ① 明确的点歌动词：唱 / 来一首 / 放首歌 / 点歌 / 放一首 …
   const explicit = body.match(/^(唱一下|唱下|唱|来一首|来一段|来首|来点|放首歌|放个歌|放一首|放首|放一下|点歌)\s*(?:个|一首|首|一段|一下|点)?\s*(.*)$/);
   if (explicit) {

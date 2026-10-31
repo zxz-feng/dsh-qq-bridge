@@ -510,7 +510,12 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   //       连续三次放空炮。根因是"想唱"没有确定性出口 —— 点歌规则只管"别人点"。
   // 现在模型想唱必须带 [[sing:歌名]]，由这里真的去扒音频发出去（说了就得做到）。
   if (out.sings?.length) {
-    const title = out.sings[0];
+    // 用户点名了歌名 → 唱用户点的。不许模型自作主张换成"别的歌"。
+    const namedByUser = (msg.text || '').match(/(?:歌名|歌曲名|曲名)\s*(?:是|叫|为|：|:)?\s*《?([^》\s，。！？]{1,20})》?/)?.[1];
+    if (namedByUser && namedByUser !== out.sings[0]) {
+      console.log(`  [group] ⚠️ 模型想唱《${out.sings[0]}》，但用户点了《${namedByUser}》→ 按用户点的唱`);
+    }
+    const title = namedByUser || out.sings[0];
     console.log(`  [group] 模型自己要唱《${title}》→ 走点歌流程`);
     try {
       await runSingleSong({ query: title, raw: '', quiet: true }, { gid, uin, name, policy, callApi, evt });
