@@ -86,10 +86,24 @@ async function singRemoteTo(file, out) {
     fd.append('pitch', String(Number(process.env.SING_PITCH ?? 0)));
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 300_000);
-    let r;
-    try {
-      r = await fetch(url.replace(/\/+$/, '') + '/sing', { method: 'POST', body: fd, signal: ctrl.signal });
-    } finally { clearTimeout(timer); }
+    let r = null;
+    let lastErr = null;
+    // 本地服务可能在开机/唤醒后正在加载模型，第一次连不上很常见（2026-10-31 14:31 就是这样，
+    // 结果整首放成了原曲）。网络级失败重试 2 次再认输。
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        r = await fetch(url.replace(/\/+$/, '') + '/sing', { method: 'POST', body: fd, signal: ctrl.signal });
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (attempt < 3) {
+          console.log(`  [voice] 换声连接失败（第 ${attempt} 次）：${e.message}，5 秒后重试`);
+          await new Promise((res) => setTimeout(res, 5000));
+        }
+      }
+    }
+    clearTimeout(timer);
+    if (!r) throw lastErr || new Error('连接不上换声服务');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const blob = Buffer.from(await r.arrayBuffer());
     if (blob.length < 2048) throw new Error(`返回太小（${blob.length}B）`);
