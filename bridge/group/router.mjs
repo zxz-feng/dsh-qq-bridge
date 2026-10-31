@@ -146,7 +146,7 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
     if (Date.now() - pend.at > 10 * 60 * 1000) pendingSing.delete(pkey);
     else if (/^(唱|对|是|嗯|好|可以|行|就这个|没错|开始)/.test(text)) {
       pendingSing.delete(pkey);
-      const wantFull = /完整版|整首|全曲|一整首|整个|全部/.test(text);
+      const wantFull = pend.full || /完整版|整首|全曲|一整首|整个|全部/.test(text);
       console.log(`  [group] 主人确认了：${pend.pick.title.slice(0, 26)} → ${wantFull ? '整首开唱' : '开唱'}`);
       if (wantFull) {
         // 注意：整首不能重新选曲，必须用刚确认过的那一首（重选会跳歌）
@@ -553,10 +553,16 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     if (namedByUser && namedByUser !== out.sings[0]) {
       console.log(`  [group] ⚠️ 模型想唱《${out.sings[0]}》，但用户点了《${namedByUser}》→ 按用户点的唱`);
     }
-    const title = namedByUser || out.sings[0];
+    let title = namedByUser || out.sings[0];
+    // 模型只记住歌名、常把版本词丢掉（「司凤版雨爱」→《雨爱》），从用户原话补回来
+    const verWord = ((msg.text || '').match(/([\u4e00-\u9fa5A-Za-z]{1,6})版/) || [])[0] || '';
+    if (verWord && !String(title).includes(verWord)) {
+      console.log(`  [group] 模型漏了版本词「${verWord}」→ 补回：${verWord}${title}`);
+      title = `${verWord}${title}`;
+    }
     console.log(`  [group] 模型自己要唱《${title}》→ 走点歌流程`);
     try {
-      await runSingleSong({ query: title, raw: '', quiet: true }, { gid, uin, name, policy, callApi, evt });
+      await runSingleSong({ query: title, raw: msg.text || '', quiet: true }, { gid, uin, name, policy, callApi, evt });
     } catch (e) {
       console.error('  [group] 自主唱歌失败:', safeErr(e));
     }
@@ -836,7 +842,9 @@ async function runSingleSong({ query, raw = '', quiet = false, pick = null }, { 
       audit(gid, { gid, uin, song: query, ok: false, reason: pre.reason });
       return true;
     }
-    pendingSing.set(`${gid}:${uin}`, { query, pick: pre.pick, at: Date.now() });
+    // 主人第一句就说了「完整版」时要记住，否则确认时他只回「唱」就变成 59 秒
+    const fullWanted = /完整版|整首|全曲|一整首|整个|全部/.test(String(raw));
+    pendingSing.set(`${gid}:${uin}`, { query, pick: pre.pick, at: Date.now(), full: fullWanted });
     const t = String(pre.pick.title).replace(/\s+/g, ' ').slice(0, 30);
     console.log(`  [group] 选到「${t}」${pre.pick.duration} → 等主人确认`);
     await send(`${quote}搜到「${t}」${pre.pick.duration}，唱这个？`);
