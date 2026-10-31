@@ -555,7 +555,12 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     }
     let title = namedByUser || out.sings[0];
     // 模型只记住歌名、常把版本词丢掉（「司凤版雨爱」→《雨爱》），从用户原话补回来
-    const verWord = ((msg.text || '').match(/([\u4e00-\u9fa5A-Za-z]{1,6})版/) || [])[0] || '';
+    // 抽「X版」：排除「完整版/原版」这类意图词，也剥掉前面的「的」
+    const verWord = ((msg.text || '').match(/[\u4e00-\u9fa5A-Za-z]{1,6}版/g) || [])
+      .map((w) => w.replace(/^[的个了和与]/, '').replace(/^(我要|要听|要|给我|帮我|来个|来一个|来|唱)/, '')
+        .replace(/^(我要|要听|要|给我|帮我|来个|来一个|来|唱)/, ''))
+      .filter((w) => /[\u4e00-\u9fa5A-Za-z]/.test(w) && !/^(完整版|整版|全版|原版|正版|高音版)$/.test(w) && !/完整版$/.test(w))
+      .pop() || '';
     if (verWord && !String(title).includes(verWord)) {
       console.log(`  [group] 模型漏了版本词「${verWord}」→ 补回：${verWord}${title}`);
       title = `${verWord}${title}`;
