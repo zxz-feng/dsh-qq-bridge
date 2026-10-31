@@ -14,7 +14,7 @@
  *   ② 歌信息   —— 查歌名/歌手/时长（B站 搜"歌名 歌曲"取最长见信息 + 维基补充）
  *   ③ 选视频   —— 按"标题匹配 + 时长接近 + 音频类特征"打分，不只看播放量
  */
-import { biliSearch, wikiSearch } from './search.mjs';
+import { biliSearch, biliUpSong, wikiSearch } from './search.mjs';
 import { chat } from './llm.mjs';
 
 // ── ① 是不是在点歌 ───────────────────────────────────────
@@ -127,6 +127,28 @@ const COVER_TITLE = [
   // 2026-10-31：搜《忘情牛肉面》时混响版（4:33）压过了原唱候选，主人要的是原曲
   /混响|Reverb|reverb|8D|环绕音效|3D音效|慢摇|DJ版/,
 ];
+
+/**
+ * 「专门放原曲」的 UP 主（主人 2026-10-31 指路）。
+ * 站内大搜对这些号的权重很低，混响/翻唱/循环歌单反而排在前面；直接翻他们的投稿最准。
+ * 格式 `mid:名字`，可用 ORIGINAL_UPS 环境变量覆盖。
+ */
+const ORIGINAL_UPS = String(process.env.ORIGINAL_UPS || '9666167:VV音乐局,3493093607213343:JLRS-LeoFM')
+  .split(',').map((x) => x.trim()).filter(Boolean)
+  .map((x) => { const [mid, name] = x.split(':'); return { mid: String(mid || '').trim(), name: String(name || '').trim() }; })
+  .filter((u) => u.mid);
+
+/** 翻这些号的投稿（并行，单号失败不影响） */
+async function upScan(kw) {
+  const out = [];
+  await Promise.all(ORIGINAL_UPS.map(async (u) => {
+    try {
+      const vids = await biliUpSong(u.mid, kw, 10);
+      for (const v of vids) out.push({ ...v, author: v.author || u.name, upName: u.name });
+    } catch { /* 单个号翻不动就算了 */ }
+  }));
+  return out;
+}
 
 /** 像"一首歌"的标题特征（加分） */
 const GOOD_TITLE = [
@@ -263,9 +285,28 @@ export async function pickSongVideo(query, { title = '' } = {}) {
     .sort((a, b) => b.score - a.score || (b.v.play ?? 0) - (a.v.play ?? 0));
 
   if (!scored.length) return { ok: false, reason: `没有像《${kw}》的视频`, probed };
-  if (scored[0].score < 8) {
+
+  let best = scored[0];
+  // 站内没有干净的原曲（分数低 / 像翻唱）→ 去原曲搬运号的投稿里翻一遍
+  const looksCover = best.score < 12 || COVER_TITLE.some((re) => re.test(String(best.v.title)));
+  if (looksCover && ORIGINAL_UPS.length) {
+    const ups = await upScan(kw);
+    if (ups.length) {
+      const upBest = ups
+        .map((v) => ({ v, ...scoreVideo(v, kw, expect, probed.artist) }))
+        .map((x) => ({ ...x, score: x.score + 10, why: [...x.why, `原曲搬运号 ${x.v.upName} 投稿`] }))
+        .filter((x) => x.score > -50)
+        .sort((a, b) => b.score - a.score)[0];
+      if (upBest && upBest.score > best.score) {
+        console.log(`  [voice] 站内不像原曲 → 翻投稿命中 ${upBest.v.bvid}《${upBest.v.title.slice(0, 30)}》`);
+        best = upBest;
+      }
+    }
+  }
+
+  if (best.score < 8) {
     return { ok: false, reason: `结果都不太像《${kw}》`, probed };
   }
 
-  return { ok: true, pick: scored[0].v, why: scored[0].why, probed, runnerUp: scored[1]?.v };
+  return { ok: true, pick: best.v, why: best.why, probed, runnerUp: scored.find((x) => x.v.bvid !== best.v.bvid)?.v };
 }

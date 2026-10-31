@@ -96,6 +96,12 @@ export async function biliSearch(keyword, n = 5) {
   return r.ok ? r.videos : [];
 }
 
+/** 在某个 UP 的投稿里按标题找歌（原曲搬运号专用，见 songpick 的 ORIGINAL_UPS） */
+export async function biliUpSong(uid, keyword, pages = 10) {
+  const r = await runBili(['upsong', String(uid), keyword, String(pages)], 40000);
+  return r.ok ? r.videos : [];
+}
+
 export async function biliInfo(bvid) {
   return runBili(['info', bvid]);
 }
