@@ -173,9 +173,12 @@ async function singRemoteTo(file, out) {
     if (!r) {
       // 连不上：可能是 5050 那头崩了（训练抢显存那次就是）。硬重启一次再试。
       if (await healRvc(url)) {
+        // 自愈已经把服务重新拉起来了，这次给它更长的预算（模型要重新加载）
+        const ctrl2 = new AbortController();
+        const timer2 = setTimeout(() => ctrl2.abort(), 120_000);
         try {
-          r = await fetch(url.replace(/\/+$/, '') + '/sing', { method: 'POST', body: fd, signal: ctrl.signal });
-        } catch (e) { lastErr = e; }
+          r = await fetch(url.replace(/\/+$/, '') + '/sing', { method: 'POST', body: fd, signal: ctrl2.signal });
+        } catch (e) { lastErr = e; } finally { clearTimeout(timer2); }
       }
     }
     if (!r) throw lastErr || new Error('连接不上换声服务');
