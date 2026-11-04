@@ -138,6 +138,9 @@ let err = null
 try { out = render(registered.comp({})) } catch (e) { err = e }
 
 console.log('\n【渲染】')
+ok('页面里摊开了「这些设置都是干什么的」', out.includes('这些设置都是干什么的'))
+ok('「最低插话分」的说明文字进了页面', out.includes('插话门槛'))
+ok('帮助文案讲了掷骰子的例子', out.includes('100 条里她接 3 次'))
 ok('渲染不抛异常', !err, err ? String(err?.stack || err).slice(0, 400) : '')
 ok('画出了「现在什么状态」', out.includes('现在什么状态'))
 ok('OneBot 状态是「已连」', out.includes('OneBot 已连'))

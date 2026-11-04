@@ -28,6 +28,8 @@ import { chat } from './llm.mjs';
 import { shortPersona, ANCHOR } from './persona.mjs';
 import { hostSpeak } from './hostsearch.mjs';
 import { stage } from './paths.mjs';
+import { runAgent } from './agent.mjs';
+import * as memory from './memory.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
 // 群策略文件：插件里由 GROUP_CFG 指过来（家目录），独立跑时退回同目录
@@ -408,10 +410,34 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
 
   let out;
   try {
-    out = await generate({ gid, policy, msg, hint: VOICE_SYS });
+    if (memory.agentEnabled(policy)) {
+      // DSH 亲自当群友：查不查、说不说、唱不唱都交给它（2026-11-04 主人定的）
+      const prefix = memory.buildPrefix({
+        platform: 'qq',
+        chatKey: gid,
+        personaText: shortPersona(gid),
+        who: name,
+      });
+      const prompt = `${prefix}${memory.formatTurn({ who: name || uin, text: msg.text })}\n`
+        + (VOICE_SYS ? `${VOICE_SYS}\n` : '');
+      out = await runAgent({ chatKey: gid, prompt, policy });
+    } else {
+      out = await generate({ gid, policy, msg, hint: VOICE_SYS });
+    }
   } catch (e) {
-    console.error('  [group] 生成失败:', e.message);
-    return;
+    console.error('  [group] 生成失败:', safeErr(e));
+    if (memory.agentEnabled(policy)) {
+      // agent 四级全灭 → 回落老路，别让群里静默
+      try {
+        out = await generate({ gid, policy, msg, hint: VOICE_SYS });
+        console.log('  [agent] 回落到 legacy 生成');
+      } catch (e2) {
+        console.error('  [group] 回落也失败:', safeErr(e2));
+        return;
+      }
+    } else {
+      return;
+    }
   }
   if (!out.parts.length) {
     // 被叫到却沉默 = 用户眼里"坏了"。硬触发一律兜一句，不给自己 pass 的权利。
@@ -670,6 +696,11 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   }
 
   store.pushSpoken(gid, out.parts.join(' '));
+  // 三层记忆：L2 摘要 + L3 事实卡（失败静默）
+  memory.noteTurn({
+    platform: 'qq', chatKey: gid, who: name || uin,
+    text: msg.text, reply: out.parts.join(' '), policy,
+  });
   const st = store.loadStats(gid);
   st.total = (st.total ?? 0) + out.parts.length;
   if (!hard) st.active = (st.active ?? 0) + 1;
