@@ -82,6 +82,12 @@ export const EMPTY_GROUP_CFG = {
     ignoreUins: [],
     selfNick: ['小鲸鱼'],
     softIgnorePending: true,
+    // ── 引擎（2026-11-04）────────────────────────────────────────────
+    // legacy = 老路：一次模型调用，代码决定查不查
+    // agent  = DSH 会话亲自当群友，自己决定查不查、说不说、唱不唱
+    engine: 'legacy',
+    agentTimeoutMs: 60000,   // 单轮 agent 上限（含工具调用）
+    slowHintSec: 18,         // 超过这么久还没出结果，先回一句"等下，我查查"（0=关）
   },
   _note: '加群时在 groups 里写 {"群号": {"label": "测试群"}}，其余继承 defaults。',
 }

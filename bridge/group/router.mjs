@@ -420,7 +420,20 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
       });
       const prompt = `${prefix}${memory.formatTurn({ who: name || uin, text: msg.text })}\n`
         + (VOICE_SYS ? `${VOICE_SYS}\n` : '');
-      out = await runAgent({ chatKey: gid, prompt, policy });
+      const slowSec = Number(policy.slowHintSec ?? 18);
+      let hintTimer = null;
+      if (slowSec > 0) {
+        hintTimer = setTimeout(() => {
+          const line = ['等下，我查查', '等我一下', '我找找看'][Math.floor(Math.random() * 3)];
+          console.log(`  [agent] 超过 ${slowSec}s 还没出结果 → 先回一句「${line}」`);
+          callApi('send_group_msg', { group_id: Number(gid), message: line }).catch(() => {});
+        }, slowSec * 1000);
+      }
+      try {
+        out = await runAgent({ chatKey: gid, prompt, policy });
+      } finally {
+        if (hintTimer) clearTimeout(hintTimer);
+      }
     } else {
       out = await generate({ gid, policy, msg, hint: VOICE_SYS });
     }

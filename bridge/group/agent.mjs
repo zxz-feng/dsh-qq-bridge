@@ -44,6 +44,38 @@ const RETRYABLE = /MISSING_CREDENTIAL|RATE_LIMIT|QUOTA|EMPTY_RESPONSE|SERVER|TIM
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// ── 排队闸 ────────────────────────────────────────────────────────────────
+// 为什么必须串行：一个 DSH 进程峰值 241MB，这台机器只剩 ~356MB。
+// 群里三个人同时叫她 = 三个进程 = 723MB = 直接 OOM（10-25、11-03 各挂过一次）。
+// 主人的要求是「排队」，不是「并发」，所以这里就是一条队列。
+const LIMIT = Math.max(1, Number(process.env.AGENT_CONCURRENCY || 1))
+const WAIT_MAX_MS = 180_000
+const QUEUE_MAX = 8
+let active = 0
+const waiters = []
+
+async function acquire(log = console.log) {
+  if (active < LIMIT) { active += 1; return }
+  if (waiters.length >= QUEUE_MAX) throw new Error(`QUEUE_FULL：前面还排着 ${QUEUE_MAX} 条`)
+  log(`  [agent] 排队中（前面 ${waiters.length + 1} 条）`)
+  await new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      const i = waiters.findIndex((w) => w.fn === fn)
+      if (i >= 0) waiters.splice(i, 1)
+      reject(new Error('QUEUE_TIMEOUT：排队超过 180 秒'))
+    }, WAIT_MAX_MS)
+    const fn = () => { clearTimeout(t); resolve() }
+    waiters.push({ fn })
+  })
+  // 被唤醒时槽位已经移交过来，不要再 +1
+}
+
+function release() {
+  const next = waiters.shift()
+  if (next) { next.fn(); return }   // 槽位移交，计数不变
+  active = Math.max(0, active - 1)
+}
+
 // ── 会话表 ────────────────────────────────────────────────────────────────
 function loadSessions() {
   try { return JSON.parse(readFileSync(SESS_FILE, 'utf8')) } catch { return {} }
@@ -178,6 +210,15 @@ function runOnce({ prompt, sessionId, level, timeoutMs }) {
  * @returns {Promise<{parts,stickers,voices,sings,model,usage,tools,sessionId,level}>}
  */
 export async function runAgent({ chatKey, prompt, policy = {}, log = console.log }) {
+  await acquire(log)
+  try {
+    return await runAgentInner({ chatKey, prompt, policy, log })
+  } finally {
+    release()
+  }
+}
+
+async function runAgentInner({ chatKey, prompt, policy = {}, log = console.log }) {
   const models = Array.isArray(policy.agentModels) && policy.agentModels.length
     ? policy.agentModels
     : DEFAULT_MODELS
