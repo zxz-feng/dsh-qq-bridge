@@ -20,6 +20,7 @@ import { shouldSearch, extractQuery, gather, hotwords } from './search.mjs';
 import { fetchPage, pageBlock, extractUrl } from './webpage.mjs';
 import { searchPosts } from './tieba.mjs';
 import { searchAll } from './search-all.mjs';
+import { isComicUpdate, comicBlock } from './comic.mjs';
 import { lookupInfo, lookupCv } from './lookup.mjs';
 import { findPicture } from './findpic.mjs';
 
@@ -122,6 +123,19 @@ async function runTools({ reads, infos, looks, tiebas = [], hint = '' }) {
     // 那后面搜贴吧就带上这个词，不用等上下文里有人提「黄油」。
     if (!hint && /galgame|エロ|エレホン|视觉小说|18禁|eroge/i.test(String(r.block || ''))) hint = 'galgame';
     console.log(`  [tool] 查了「${q}」${r.ok ? '' : '（没查到）'}`);
+    // 「这部漫画更新到第几话了」这类问题，再单独问一次话号
+    // （2026-11-04 群友问《异世界舅舅》，四个源只回了链接，答不出第几话）
+    if (isComicUpdate(q)) {
+      const cb = await Promise.race([
+        comicBlock(q).catch(() => ''),
+        new Promise((res) => setTimeout(() => res(''), 22000)),
+      ]);
+      if (cb) {
+        blocks.push('\n' + cb);
+        used.push('comic:' + q.slice(0, 24));
+        console.log(`  [tool] 话号：${cb.replace(/\s+/g, ' ').slice(0, 80)}`);
+      }
+    }
   }
 
   for (const q of tiebas.slice(0, 1)) {

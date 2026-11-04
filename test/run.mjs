@@ -368,6 +368,16 @@ console.log('\n【人设（QQ 群版）】')
   api.close(); api2.close(); api3.close()
 }
 
+// ── 漫画更新话号（纯函数，不联网）──────────────────────
+{
+  const c = await import('../bridge/group/comic.mjs')
+  ok('「漫画 更新到第几话」判定为漫画更新', c.isComicUpdate('异世界舅舅漫画更新到哪里了') === true)
+  ok('普通闲聊不判定为漫画更新', c.isComicUpdate('今天中午吃什么') === false)
+  ok('标题清洗去掉「漫画/更新到/哪里了」', c.pickTitle('异世界舅舅漫画更新到哪里了') === '异世界舅舅')
+  ok('话号取最大，年份不当话号', c.maxNum('更新至第 81 话，第 80 话，2024年') === 81)
+  ok('英文 Ch. 也认', c.maxNum('Chapter 123 released') === 123)
+}
+
 // ── 汇总 ──────────────────────────────────────────────
 console.log(`\n=== ${pass} 通过 / ${fail} 失败 ===`)
 if (fail) { console.log(`失败项：${failures.join('、')}`); process.exit(1) }

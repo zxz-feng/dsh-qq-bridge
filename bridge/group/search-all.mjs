@@ -49,7 +49,7 @@ async function wikipedia(q) {
 }
 
 /** DuckDuckGo html：长尾兜底 */
-async function ddg(q) {
+export async function ddgSearch(q) {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`
   const args = ['-sS', '-L', '--max-time', '12', '-A', UA]
   const px = proxyUrl()
@@ -68,8 +68,12 @@ async function ddg(q) {
     const title = htmlToText(t).replace(/\s+/g, ' ').trim()
     if (!title) continue
     let host = ''
-    try { host = decodeURIComponent(u).replace(/^https?:\/\//, '').split('/')[0] } catch { /* 忽略 */ }
-    out.push({ title: title.slice(0, 60), host, snippet: htmlToText(sn).replace(/\s+/g, ' ').trim().slice(0, 80) })
+    let url = ''
+    try {
+      url = decodeURIComponent(u)
+      host = url.replace(/^https?:\/\//, '').split('/')[0]
+    } catch { /* 忽略 */ }
+    out.push({ title: title.slice(0, 60), host, url, snippet: htmlToText(sn).replace(/\s+/g, ' ').trim().slice(0, 80) })
   }
   if (!out.length) return { ok: false, reason: 'DDG 没结果' }
   return { ok: true, source: '网页', items: out }
@@ -94,7 +98,7 @@ export async function searchAll(q, { hint = '' } = {}) {
     })(), 15000),
     guard(wikipedia(word), 12000),
     guard(searchPosts(kw), 12000),
-    guard(ddg(kw), 12000),
+    guard(ddgSearch(kw), 12000),
   ])
 
   const lines = []
