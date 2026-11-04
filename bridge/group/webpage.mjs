@@ -98,7 +98,13 @@ function pickImages(html, base) {
  * 走 mihomo 代理 1.4 秒。node 的 fetch 不吃 HTTP_PROXY，所以网络层交给 curl，
  * 代理地址从 WEB_PROXY 环境变量来（宿主 config 里的 webProxy 传下来的）。
  */
-function proxyUrl() { return String(process.env.WEB_PROXY || '').trim(); }
+function proxyUrl() {
+  const s = String(process.env.WEB_PROXY || '').trim()
+  if (/^(https?|socks5h?):\/\//i.test(s)) return s
+  // 环境变量坏了（曾出现 "[object Object]"）就退回本机 mihomo：
+  // 这台机器直连萌娘/DDG 基本都超时，没有代理等于「查不到」
+  return 'http://127.0.0.1:17890'
+}
 
 const _cache = new Map();   // url → { at, status, html }   （5 分钟）
 const CACHE_MS = 5 * 60 * 1000;

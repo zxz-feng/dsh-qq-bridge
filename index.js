@@ -107,9 +107,24 @@ export function apply(ctx, config = {}) {
     ...envFor(cfg, home),
     ...(tiebaMcp ? { TIEBA_MCP: tiebaMcp } : {}),
     // 抓网页的代理：配置页填了就用它，否则沿用环境变量
-    ...((config.webProxy || process.env.WEB_PROXY || process.env.HTTPS_PROXY)
-      ? { WEB_PROXY: config.webProxy || process.env.WEB_PROXY || process.env.HTTPS_PROXY } : {}),
+    ...(webProxyUrl() ? { WEB_PROXY: webProxyUrl() } : {}),
   }
+  /**
+   * 抓网页用的代理。**一定要过一遍**：配置层存过对象/空串/带引号的字符串，
+   * 直接塞进环境变量会变成 "[object Object]"，curl -x '[object Object]'
+   * 于是百科和 DDG 全部失败，只剩贴吧能出结果 —— 表现就是「查不到」
+   * （2026-11-04 群里点漫画时踩到）。
+   */
+  function webProxyUrl() {
+    const cands = [config.webProxy, process.env.WEB_PROXY, process.env.HTTPS_PROXY]
+    for (const c of cands) {
+      const v = typeof c === 'string' ? c : String(c?.url ?? '')
+      const t = v.trim().replace(/^['"]|['"]$/g, '')
+      if (/^(https?|socks5h?):\/\//i.test(t)) return t
+    }
+    return ''
+  }
+
   const sup = new Supervisor({
     script: BRIDGE_SCRIPT,
     env: hostEnv,

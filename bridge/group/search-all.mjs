@@ -15,7 +15,13 @@ const UA = 'Lynx/2.8.9rel.1 libwww-FM/2.14'
 const PER_SOURCE_MS = 12000
 const MAX_TOTAL = 1800
 
-function proxyUrl() { return String(process.env.WEB_PROXY || '').trim() }
+function proxyUrl() {
+  const s = String(process.env.WEB_PROXY || '').trim()
+  if (/^(https?|socks5h?):\/\//i.test(s)) return s
+  // 环境变量坏了（曾出现 "[object Object]"）就退回本机 mihomo：
+  // 这台机器直连萌娘/DDG 基本都超时，没有代理等于「查不到」
+  return 'http://127.0.0.1:17890'
+}
 
 async function curlJson(url, { timeoutMs = PER_SOURCE_MS } = {}) {
   const sec = Math.max(3, Math.ceil(timeoutMs / 1000))

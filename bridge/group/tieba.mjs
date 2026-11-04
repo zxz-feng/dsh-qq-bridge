@@ -172,7 +172,8 @@ export async function searchPosts(word, { pn = 1 } = {}) {
   const url = `https://tieba.baidu.com/mo/q/search/thread?word=${encodeURIComponent(w)}&pn=${pn}`
   const args = ['-sS', '-L', '--max-time', '15', '-A', SEARCH_UA,
     '-H', `Cookie: ${cookie}`, '-H', 'Accept-Language: zh-CN,zh;q=0.9']
-  const px = String(process.env.WEB_PROXY || '').trim()
+  const pxRaw = String(process.env.WEB_PROXY || '').trim()
+  const px = /^(https?|socks5h?):\/\//i.test(pxRaw) ? pxRaw : 'http://127.0.0.1:17890'
   if (px) args.push('-x', px)
   args.push(url)
 
