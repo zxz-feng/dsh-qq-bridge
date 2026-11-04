@@ -12,7 +12,7 @@
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { biliSearch, biliInfo } from './search.mjs';
 import { pickSongVideo, judgeSong } from './songpick.mjs';
@@ -214,18 +214,73 @@ async function singRemote(file, bvid) {
   return singRemoteTo(file, `${VOICE_DIR}/${bvid}_${SEG_SEC}s_her.mp3`);
 }
 
-/**
- * 整首：每段都换声（用户 2026-10-30 问「唱完整版会不会生效」）
- * 串行做，避免把本地 GPU 挤爆；一段 7~8 秒，6 段约 45 秒
- */
-async function singSegments(segs) {
-  const out = [];
-  for (let i = 0; i < segs.length; i += 1) {
-    const her = await singRemoteTo(segs[i], segs[i].replace(/\.mp3$/, '_her.mp3'));
-    out.push(her || segs[i]);
-    if (her) console.log(`  [voice] 整首换声 ${i + 1}/${segs.length}`);
+// ── 整首换声只做一次（2026-11-04 主人要求）─────────────────────────────
+//
+// 为什么不能把「段长」写进缓存键：SEG_SEC 改一次（59→240→3600），
+// 同一首《雨爱》就重换三遍嗓子 —— 最贵的一步（本地 GPU 分离 + 换声，
+// 一次 86~150 秒）白跑，而盘上其实躺着同样的 6096KB。
+//
+// 现在只缓存「整首已换声的一条」，发的时候再按段长切（ffmpeg，1 秒）。
+// 段长怎么改、点几次，GPU 都只跑一次。
+const HER_CHUNK_SEC = Number(process.env.HER_CHUNK_SEC ?? 150);   // 单次送换声的块长
+
+/** 整首换声结果的落盘位置（不含段长） */
+export function herFullPath(bvid) { return `${VOICE_DIR}/${bvid}_herfull.mp3`; }
+
+function herPartPath(bvid, i) { return `${VOICE_DIR}/${bvid}_herpart_${i}.mp3`; }
+
+async function concatAudio(list, out) {
+  const txt = `${VOICE_DIR}/concat-${Date.now()}.txt`;
+  writeFileSync(txt, list.map((q) => `file '${q}'`).join('\n'));
+  try {
+    await exec('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', txt, '-c', 'copy', out],
+      { timeout: 120000, maxBuffer: 4 * 1024 * 1024 });
+  } finally {
+    try { unlinkSync(txt) } catch { /* 忽略 */ }
   }
-  return out;
+}
+
+/**
+ * 把整首歌换成她的嗓子，落一条 `_herfull.mp3`，之后永久复用。
+ * 没有配本地 /sing 时也照常工作（等于原唱拼一条，行为跟以前一致）。
+ * @returns {Promise<{path:string, her:boolean, total:number, cached:boolean}>}
+ */
+export async function ensureHerFull(bvid) {
+  const out = herFullPath(bvid);
+  if (existsSync(out) && statSync(out).size > 100 * 1024) {
+    console.log(`  [voice] 缓存命中（整首换声）${Math.round(statSync(out).size / 1024)}KB`);
+    return { path: out, her: true, total: await probeDuration(out), cached: true };
+  }
+  const src = await downloadAudio(bvid);
+  const total = await probeDuration(src);
+  if (!total) throw new Error('读不出时长');
+
+  const n = Math.max(1, Math.ceil(total / HER_CHUNK_SEC));
+  const parts = [];
+  let converted = 0;
+  for (let i = 0; i < n; i += 1) {
+    const seg = herPartPath(bvid, i);
+    const dur = Math.min(HER_CHUNK_SEC, total - i * HER_CHUNK_SEC);
+    if (!existsSync(seg) || statSync(seg).size < 2000) await cutSegment(src, seg, i * HER_CHUNK_SEC, dur);
+    const her = await singRemoteTo(seg, seg.replace(/\.mp3$/, '_her.mp3'));
+    if (her) converted += 1;
+    parts.push(her || seg);
+    console.log(`  [voice] 整首换声 ${i + 1}/${n}${her ? '' : '（这段失败，保留原唱）'}`);
+  }
+  if (parts.length === 1) copyFileSync(parts[0], out);
+  else await concatAudio(parts, out);
+  console.log(`  [voice] 整首换声完成 ${Math.round(statSync(out).size / 1024)}KB`
+    + `（${n} 块，${converted} 块是她的嗓子）`);
+  return { path: out, her: converted > 0, total, cached: false };
+}
+
+/** 从整首换声结果里切第 index 段（便宜，不碰 GPU） */
+export async function cutForSend(bvid, index, sec) {
+  const src = herFullPath(bvid);
+  const dst = `${VOICE_DIR}/${bvid}_send_${sec}s_${index}.mp3`;
+  if (existsSync(dst) && statSync(dst).size > 2000) return dst;
+  await cutSegment(src, dst, index * sec, sec);
+  return dst;
 }
 
 /**
@@ -399,44 +454,29 @@ export async function makeVoice(query, { pick: forced = null } = {}) {
   console.log(`  [voice] 选中 ${bvid}「${String(pick.title).slice(0, 36)}」`
     + ` ${pick.duration} | ${(sel.why ?? []).join('、')}`);
 
-  // 缓存命中直接用
-  if (existsSync(cachePath(bvid))) {
-    // 缓存命中也要过一遍换声：否则「第一次没配 /sing、后来配了」的歌永远是原曲
-    const herCached = await singRemote(cachePath(bvid), bvid);
-    return {
-      ok: true, path: herCached || cachePath(bvid), her: !!herCached, title: pick.title, bvid,
-      label: (version ? '女版的' : '') + String(kw).slice(0, 16), sec: SEG_SEC, cached: true,
-    };
-  }
-
-  let info;
-  try { info = await biliInfo(bvid); } catch { info = { ok: false }; }
-  const total = Number(info?.duration ?? 0) || parseDuration(pick.duration);
-
-  // 一律从头开始，不切中间（用户 2026-10-27 要求：不要挖中段）
-  const start = 0;
-  let dur = SEG_SEC;
-  if (total > 0 && total < SEG_SEC) dur = Math.max(10, total - 1);
-
-  let src;
-  try { src = await downloadAudio(bvid); }
-  catch (e) { return { ok: false, reason: '下载失败: ' + e.message }; }
-
+  // ① 整首换成她的嗓子（一次，永久复用；跟段长无关）
+  let full;
   try {
-    await cutSegment(src, cachePath(bvid), start, dur);
+    full = await ensureHerFull(bvid);
   } catch (e) {
-    return { ok: false, reason: '切段失败: ' + e.message };
+    return { ok: false, reason: '换声/下载失败: ' + e.message };
   }
+  // ② 只切要发的那一段
+  const total = Number(full.total) || parseDuration(pick.duration);
+  let dur = SEG_SEC;
+  if (total > 0 && total < dur) dur = Math.max(10, total - 1);
 
-  const size = statSync(cachePath(bvid)).size;
+  let path;
+  try { path = await cutForSend(bvid, 0, dur); }
+  catch (e) { return { ok: false, reason: '切段失败: ' + e.message }; }
+
+  const size = statSync(path).size;
   if (size < 2000) return { ok: false, reason: '切出来的文件太小，可能没声音' };
 
-  // 配了本地 /sing 就用她的嗓子唱；失败/没配就放原曲（不能因为换声失败就不发语音）
-  const her = await singRemote(cachePath(bvid), bvid);
-
   return {
-    ok: true, path: her || cachePath(bvid), her: !!her, title: pick.title, bvid,
-    label: (version ? '女版的' : '') + String(kw).slice(0, 16), sec: dur, start, size, cached: false,
+    ok: true, path, her: !!full.her, title: pick.title, bvid,
+    label: (version ? '女版的' : '') + String(kw).slice(0, 16),
+    sec: dur, start: 0, size, cached: !!full.cached,
   };
 }
 
@@ -454,11 +494,9 @@ export function recordCQ(absPath) {
 // ── 整首分段 ────────────────────────────────────────────
 //
 // QQ 单条语音上限 60 秒，所以整首要拆成多段发。
-// 缓存：整首的每一段都落盘，下次同一首直接复用（meta 文件记录段数）。
+// 缓存：整首换声只做一次（_herfull.mp3），切片按段长现切 —— 见 ensureHerFull。
 
 const FULL_MAX_SEG = Number(process.env.VOICE_FULL_MAX_SEG ?? 6);   // 最多发几段（约 6 分钟）
-
-function fullMetaPath(bvid) { return `${VOICE_DIR}/${bvid}_full.json`; }
 
 /**
  * 扒整首歌，切成多段
@@ -487,88 +525,33 @@ export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG, onSegment = 
   console.log(`  [voice] 整首选中 ${bvid}「${String(pick.title).slice(0, 36)}」`
     + ` ${pick.duration} | ${why.join('、')}`);
 
-  // 缓存命中
-  let meta = (() => {
-    try { return JSON.parse(readFileSync(fullMetaPath(bvid), 'utf8')); } catch { return null; }
-  })();
-  // 段长改过之后，旧切片必须作废（2026-11-03 事故：SEG_SEC 59→240 后仍按 5 段发，
-  // 因为缓存分支只看 meta.count，还用新的 240 去标「第 x 段」—— 5 段全标 240s）
-  if (meta && Number(meta.segSec) !== SEG_SEC) {
-    for (let i = 0; i < Number(meta.count || 0); i += 1) {
-      for (const f of [`${VOICE_DIR}/${bvid}_full_${i}.mp3`, `${VOICE_DIR}/${bvid}_full_${i}_her.mp3`]) {
-        try { unlinkSync(f) } catch { /* 忽略 */ }
-      }
-    }
-    try { unlinkSync(fullMetaPath(bvid)) } catch { /* 忽略 */ }
-    console.log(`  [voice] 段长 ${meta.segSec}s → ${SEG_SEC}s，旧切片作废重切`);
-    meta = null;
+  // 整首换成她的嗓子（一次），再按段长切 —— 段长怎么改都不重跑 GPU
+  let full;
+  try {
+    full = await ensureHerFull(bvid);
+  } catch (e) {
+    return { ok: false, reason: '换声/下载失败: ' + e.message };
   }
-  if (meta && meta.count > 0) {
-    const segs = [];
-    for (let i = 0; i < meta.count; i += 1) {
-      const p = `${VOICE_DIR}/${bvid}_full_${i}.mp3`;
-      if (!existsSync(p)) { segs.length = 0; break; }
-      segs.push(p);
-    }
-    if (segs.length) {
-      const hers = [];
-      for (let i = 0; i < segs.length; i += 1) {
-        const her = await singRemoteTo(segs[i], segs[i].replace(/\.mp3$/, '_her.mp3'));
-        const p = her || segs[i];
-        hers.push(p);
-        if (her) console.log(`  [voice] 整首换声 ${i + 1}/${segs.length}`);
-        if (onSegment) await onSegment({ path: p, index: i, total: segs.length, sec: SEG_SEC });
-      }
-      return {
-        ok: true, segments: hers, her: hers.some((p, i) => p !== segs[i]),
-        title: pick.title, bvid,
-        total: meta.total, count: segs.length, truncated: meta.truncated, cached: true,
-      };
-    }
-  }
-
-  // 下载整条音频
-  let src;
-  try { src = await downloadAudio(bvid); }
-  catch (e) { return { ok: false, reason: '下载失败: ' + e.message }; }
-
-  const total = await probeDuration(src);
-  if (!total) {
-    try { unlinkSync(src); } catch { /* ignore */ }
-    return { ok: false, reason: '读不出时长' };
-  }
+  const total = Number(full.total) || 0;
+  if (!total) return { ok: false, reason: '读不出时长' };
 
   const need = Math.ceil(total / SEG_SEC);
   const count = Math.min(need, Math.max(1, Number(maxSeg) || FULL_MAX_SEG));
-
-  const segments = [];
   const hers = [];
   try {
     for (let i = 0; i < count; i += 1) {
-      const dst = `${VOICE_DIR}/${bvid}_full_${i}.mp3`;
-      await cutSegment(src, dst, i * SEG_SEC, SEG_SEC);
-      segments.push(dst);
-      // 换完这一段就立刻交出去，不等后面几段（主人 2026-10-31 要求）
-      const her = await singRemoteTo(dst, dst.replace(/\.mp3$/, '_her.mp3'));
-      const p = her || dst;
+      const p = await cutForSend(bvid, i, SEG_SEC);
       hers.push(p);
-      if (her) console.log(`  [voice] 整首换声 ${i + 1}/${count}`);
+      // 切一段发一段，不等后面几段（主人 2026-10-31 要求）
       if (onSegment) await onSegment({ path: p, index: i, total: count, sec: SEG_SEC });
     }
   } catch (e) {
     return { ok: false, reason: '切段失败: ' + e.message };
-  } finally {
-    try { unlinkSync(src); } catch { /* ignore */ }
   }
 
-  writeFileSync(fullMetaPath(bvid), JSON.stringify({
-    total, count, truncated: need > count, segSec: SEG_SEC,
-  }));
-
   return {
-    ok: true, segments: hers, her: hers.some((p, i) => p !== segments[i]),
-    title: pick.title, bvid,
-    total, count, truncated: need > FULL_MAX_SEG, cached: false,
+    ok: true, segments: hers, her: !!full.her, title: pick.title, bvid,
+    total, count, truncated: need > count, cached: !!full.cached,
   };
 }
 

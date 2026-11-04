@@ -10,7 +10,7 @@
  * ============================================================================
  */
 import { mkdtempSync, writeFileSync, existsSync } from 'node:fs'
-import { splitVersion } from '../bridge/group/voice.mjs'
+import { splitVersion, herFullPath } from '../bridge/group/voice.mjs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -377,6 +377,10 @@ console.log('\n【人设（QQ 群版）】')
   ok('话号取最大，年份不当话号', c.maxNum('更新至第 81 话，第 80 话，2024年') === 81)
   ok('英文 Ch. 也认', c.maxNum('Chapter 123 released') === 123)
 }
+
+// 换声缓存不许跟段长绑定（2026-11-04 主人要求：点过的歌直接命中已换声的整首）
+ok('换声缓存按歌存、不带段长', herFullPath('BV1sZywBxEHd').endsWith('_herfull.mp3'))
+ok('改段长不换文件名（GPU 只跑一次）', !herFullPath('BV1sZywBxEHd').includes('3600'))
 
 // ── 汇总 ──────────────────────────────────────────────
 console.log(`\n=== ${pass} 通过 / ${fail} 失败 ===`)
