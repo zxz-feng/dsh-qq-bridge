@@ -229,6 +229,38 @@ export function herFullPath(bvid) { return `${VOICE_DIR}/${bvid}_herfull.mp3`; }
 
 function herPartPath(bvid, i) { return `${VOICE_DIR}/${bvid}_herpart_${i}.mp3`; }
 
+// ── 换声曲库索引 ────────────────────────────────────────
+// 缓存文件名是 bvid，人看不懂；TG 那边要「随便来一首缓存里的歌」，
+// 就得有 bvid → 歌名 的对照。顺带记住时长，省一次 ffprobe。
+const SONG_INDEX = `${VOICE_DIR}/index.json`;
+
+export function readSongIndex() {
+  try { return JSON.parse(readFileSync(SONG_INDEX, 'utf8')) || {} } catch { return {} }
+}
+
+export function rememberSong(bvid, info = {}) {
+  try {
+    const idx = readSongIndex();
+    idx[bvid] = { ...(idx[bvid] || {}), ...info, at: Date.now() };
+    writeFileSync(SONG_INDEX, JSON.stringify(idx, null, 1));
+  } catch { /* 索引写不进去不影响唱歌 */ }
+}
+
+/** 缓存里「整首已换声」的歌，最近用过的排前面 */
+export function cachedSongs() {
+  const idx = readSongIndex();
+  const out = [];
+  for (const [bvid, v] of Object.entries(idx)) {
+    const p = herFullPath(bvid);
+    try {
+      if (statSync(p).size > 100 * 1024) {
+        out.push({ bvid, title: String(v.title || bvid), sec: Number(v.sec || 0), at: Number(v.at || 0) });
+      }
+    } catch { /* 文件没了就跳过 */ }
+  }
+  return out.sort((a, b) => b.at - a.at);
+}
+
 async function concatAudio(list, out) {
   const txt = `${VOICE_DIR}/concat-${Date.now()}.txt`;
   writeFileSync(txt, list.map((q) => `file '${q}'`).join('\n'));
@@ -249,7 +281,9 @@ export async function ensureHerFull(bvid) {
   const out = herFullPath(bvid);
   if (existsSync(out) && statSync(out).size > 100 * 1024) {
     console.log(`  [voice] 缓存命中（整首换声）${Math.round(statSync(out).size / 1024)}KB`);
-    return { path: out, her: true, total: await probeDuration(out), cached: true };
+    const total = await probeDuration(out);
+    rememberSong(bvid, { sec: Math.round(total || 0) });
+    return { path: out, her: true, total, cached: true };
   }
   const src = await downloadAudio(bvid);
   const total = await probeDuration(src);
@@ -473,6 +507,7 @@ export async function makeVoice(query, { pick: forced = null } = {}) {
   const size = statSync(path).size;
   if (size < 2000) return { ok: false, reason: '切出来的文件太小，可能没声音' };
 
+  rememberSong(bvid, { title: String(pick.title).replace(/\s+/g, ' ').trim(), sec: Math.round(total || 0) });
   return {
     ok: true, path, her: !!full.her, title: pick.title, bvid,
     label: (version ? '女版的' : '') + String(kw).slice(0, 16),
