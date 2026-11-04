@@ -85,10 +85,14 @@ export function extractJson(text) {
 export function toOutput(obj) {
   const out = { parts: [], stickers: [], voices: [], sings: [], reads: [], infos: [], looks: [], tiebas: [], pictures: [], searched: false, agent: true }
   if (!obj) return out
-  const reply = String(obj.reply ?? '').replace(/\s+/g, ' ').trim()
+  // 不设字数上限（2026-11-04 主人要求）：模型用 \n 分段，一段发一条，
+  // 最多 4 条 —— 再多就不是聊天，是刷屏了。
+  const reply = String(obj.reply ?? '').replace(/\r/g, '').trim()
   if (obj.silence === true || !reply) { out.passed = true; return out }
-  out.parts = [reply]
-  if (obj.voice === true) out.voices = [reply]
+  const chunks = reply.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 4)
+  out.parts = chunks.length ? chunks : [reply]
+  // 语音只能是"一段话"，所以多段时合并成一句，交给 router 只发一条语音
+  if (obj.voice === true) out.voices = [chunks.join('，')]
   if (obj.sing) {
     const name = String(obj.sing).trim()
     // 「首歌 / 一首歌 / 歌」这种不是歌名，是"随便唱" —— 交回 router 的随机逻辑

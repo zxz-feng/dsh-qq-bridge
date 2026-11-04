@@ -24,6 +24,9 @@ ok(toOutput({ reply: '行', sing: '首歌' }).sings.length === 0, '「首歌」�
 ok(toOutput({ reply: '行', sing: '一首歌' }).sings.length === 0, '「一首歌」不是歌名')
 ok(toOutput({ reply: '哈', sticker: '开心' }).stickers[0] === '开心', 'sticker 透传')
 ok(toOutput(null).parts.length === 0, 'null 不炸')
+ok(toOutput({ reply: '第一段\n第二段\n第三段' }).parts.length === 3, '换行分段 → 发三条')
+ok(toOutput({ reply: '1\n2\n3\n4\n5\n6' }).parts.length === 4, '最多四条，别刷屏')
+ok(toOutput({ reply: '很长的一句话'.repeat(40) }).parts[0].length > 60, '长回复不截断')
 
 console.log(`\n===== ${fail ? '✗' : '✓'} agent 解析 ${pass} 通过 / ${fail} 失败 =====`)
 process.exit(fail ? 1 : 0)
