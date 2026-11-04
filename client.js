@@ -142,6 +142,37 @@ window.__ModuleLoader__.load({
 
     /* ────────────── 群卡片 ────────────── */
 
+    /** 一行鲸鱼：数字框是本地草稿，回车或点别处才提交（每次按键都发请求会把输入框刷回去） */
+    function WhaleRow({ w, onSave }) {
+      const cur = pct(w.replyProb ?? 0.3)
+      const [v, setV] = React.useState(cur)
+      React.useEffect(() => { setV(cur) }, [cur])
+
+      const commit = React.useCallback(() => {
+        const n = Number(v)
+        if (!Number.isFinite(n) || String(v).trim() === '') { setV(cur); return }
+        const clamped = Math.max(0, Math.min(100, n))
+        setV(clamped)
+        if (Math.abs(clamped - cur) < 0.01) return
+        void onSave({ uin: w.uin, label: w.label, replyProb: clamped / 100 })
+      }, [v, cur, w.uin, w.label, onSave])
+
+      return h('div', { 'data-qq-tr': '' },
+        h('span', { 'data-qq-mono': '', style: { width: '120px' } }, w.uin),
+        h('span', { 'data-qq-grow': '' }, w.label || '（没备注）'),
+        h('input', {
+          'data-qq-input': '', 'data-qq-num': '', type: 'number', min: 0, max: 100, step: 5,
+          style: { width: '80px' },
+          value: v,
+          onChange: (e) => setV(e.target.value),
+          onBlur: commit,
+          onKeyDown: (e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } },
+        }),
+        h('span', { 'data-qq-note': '' }, '%'),
+        h('button', { 'data-qq-btn': '', onClick: () => void onSave({ uin: w.uin, remove: true }) }, '删掉'),
+      )
+    }
+
     /** 鲸鱼群友：按 QQ 号认，可以单独给接话概率（另一个接管号的鲸鱼） */
     function WhaleList({ gid, initial }) {
       const [list, setList] = React.useState(initial || [])
@@ -159,17 +190,9 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { 'data-qq-sub': '' },
-        h('div', { 'data-qq-note': '' }, '鲸鱼群友（也是接管 QQ 的同类）：按 QQ 号认，改了昵称也不丢；可以单独给接话概率'),
+        h('div', { 'data-qq-note': '' }, '鲸鱼群友（也是接管 QQ 的同类）：按 QQ 号认，改了昵称也不丢。概率改完回车或点别处生效'),
         list.length
-          ? h('div', { 'data-qq-tbl': '' }, list.map((w) => h('div', { 'data-qq-tr': '', key: w.uin },
-            h('span', { 'data-qq-mono': '', style: { width: '120px' } }, w.uin),
-            h('span', { 'data-qq-grow': '' }, w.label || '（没备注）'),
-            h(Num, {
-              value: pct(w.replyProb ?? 0.3), min: 0, max: 100, step: 5, width: '80px',
-              onChange: (n) => void save({ uin: w.uin, label: w.label, replyProb: Number(n) / 100 }),
-            }),
-            h('button', { 'data-qq-btn': '', onClick: () => void save({ uin: w.uin, remove: true }) }, '删掉'),
-          )))
+          ? h('div', { 'data-qq-tbl': '' }, list.map((w) => h(WhaleRow, { key: w.uin, w, onSave: save })))
           : h('div', { 'data-qq-note': '' }, '还没加。加一个之后，它说话会单独按这里的概率决定回不回。'),
         h('div', { 'data-qq-row': '' },
           h('input', {
