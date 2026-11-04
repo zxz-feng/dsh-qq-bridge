@@ -39,7 +39,9 @@ export function save(p) {
 
 /** 是不是"别的鲸鱼"（群名片/昵称里带鲸鱼） */
 export function isOtherWhale(name, pattern = '鲸鱼') {
-  return String(name ?? '').includes(pattern);
+  // 支持 "鲸鱼|肥鱼" 这种多关键词；用 indexOf 会漏掉第二个
+  const s = String(name ?? '');
+  return String(pattern).split('|').some((w) => { const t = w.trim(); return t && s.includes(t); });
 }
 
 export function tierOf(affinity) {

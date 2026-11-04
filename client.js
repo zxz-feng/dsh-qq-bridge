@@ -97,6 +97,7 @@ window.__ModuleLoader__.load({
 [data-qq-away]{display:none !important;}
 [data-qq-qr]{display:flex;gap:12px;align-items:flex-start;}
 [data-qq-qr] img{width:150px;height:150px;border-radius:8px;background:#fff;padding:6px;}
+[data-qq-sub] { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line, #2a3340); }
 [data-qq-tbl]{display:flex;flex-direction:column;gap:6px;}
 [data-qq-tr]{display:flex;align-items:center;gap:8px;font-size:12px;}
 [data-qq-mono]{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
@@ -140,6 +141,54 @@ window.__ModuleLoader__.load({
     const pct = (v) => Math.round(Number(v ?? 0) * 1000) / 10   // 0.02 → 2
 
     /* ────────────── 群卡片 ────────────── */
+
+    /** 鲸鱼群友：按 QQ 号认，可以单独给接话概率（另一个接管号的鲸鱼） */
+    function WhaleList({ gid, initial }) {
+      const [list, setList] = React.useState(initial || [])
+      const [uin, setUin] = React.useState('')
+      const [label, setLabel] = React.useState('')
+      const [prob, setProb] = React.useState(30)
+      const [err, setErr] = React.useState('')
+
+      const save = async (body) => {
+        setErr('')
+        const r = await jpost('/whales', { gid, ...body })
+        if (!r || !r.ok) { setErr((r && r.error) || '保存失败'); return false }
+        setList(r.whales || [])
+        return true
+      }
+
+      return h('div', { 'data-qq-sub': '' },
+        h('div', { 'data-qq-note': '' }, '鲸鱼群友（也是接管 QQ 的同类）：按 QQ 号认，改了昵称也不丢；可以单独给接话概率'),
+        list.length
+          ? h('div', { 'data-qq-tbl': '' }, list.map((w) => h('div', { 'data-qq-tr': '', key: w.uin },
+            h('span', { 'data-qq-mono': '', style: { width: '120px' } }, w.uin),
+            h('span', { 'data-qq-grow': '' }, w.label || '（没备注）'),
+            h(Num, {
+              value: pct(w.replyProb ?? 0.3), min: 0, max: 100, step: 5, width: '80px',
+              onChange: (n) => void save({ uin: w.uin, label: w.label, replyProb: Number(n) / 100 }),
+            }),
+            h('button', { 'data-qq-btn': '', onClick: () => void save({ uin: w.uin, remove: true }) }, '删掉'),
+          )))
+          : h('div', { 'data-qq-note': '' }, '还没加。加一个之后，它说话会单独按这里的概率决定回不回。'),
+        h('div', { 'data-qq-row': '' },
+          h('input', {
+            'data-qq-input': '', 'data-qq-mono': '', placeholder: 'QQ 号', style: { width: '120px' },
+            value: uin, onChange: (e) => setUin(e.target.value),
+          }),
+          h('input', {
+            'data-qq-input': '', placeholder: '备注（呆呆的大肥鱼）', style: { width: '160px' },
+            value: label, onChange: (e) => setLabel(e.target.value),
+          }),
+          h(Num, { value: prob, min: 0, max: 100, step: 5, width: '80px', onChange: (n) => setProb(n) }),
+          h('button', {
+            'data-qq-btn': '', 'data-primary': '', disabled: !uin,
+            onClick: () => void save({ uin, label, replyProb: Number(prob) / 100 })
+              .then((ok) => { if (ok) { setUin(''); setLabel('') } }),
+          }, '加进去')),
+        err ? h('div', { 'data-qq-note': '' }, err) : null,
+      )
+    }
 
     function GroupCard({ row, styles, busy, onSave, onStyle, onDryRun }) {
       const eff = row.effective || {}
@@ -190,6 +239,12 @@ window.__ModuleLoader__.load({
             h('span', { 'data-qq-note': '' }, '冷场插话 %'),
             h(Num, { value: pct(v('coldProb')), min: 0, max: 100, step: 0.5, onChange: (n) => set('coldProb', Number(n) / 100) })),
           h('label', { 'data-qq-col': '' },
+            h('span', { 'data-qq-note': '' }, '同类鲸鱼接话 %'),
+            h(Num, { value: pct(v('whaleReplyProb') ?? 0), min: 0, max: 100, step: 0.5, onChange: (n) => set('whaleReplyProb', Number(n) / 100) })),
+          h('label', { 'data-qq-col': '' },
+            h('span', { 'data-qq-note': '' }, '最低插话分（2=保守 1=活跃）'),
+            h(Num, { value: v('minScore') ?? 2, min: 0, max: 20, onChange: (n) => set('minScore', n) })),
+          h('label', { 'data-qq-col': '' },
             h('span', { 'data-qq-note': '' }, '每日主动条数'),
             h(Num, { value: v('dailyActive'), min: 0, max: 200, onChange: (n) => set('dailyActive', n) })),
           h('label', { 'data-qq-col': '' },
@@ -222,6 +277,8 @@ window.__ModuleLoader__.load({
           h('label', { 'data-qq-col': '' },
             h('span', { 'data-qq-note': '' }, '整首最多几段'),
             h(Num, { value: v('fullSongMaxSeg'), min: 1, max: 60, onChange: (n) => set('fullSongMaxSeg', n) }))),
+
+        h(WhaleList, { gid: row.gid, initial: Array.isArray(eff.whales) ? eff.whales : [] }),
 
         h('div', { 'data-qq-row': '' },
           h('button', {

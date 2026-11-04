@@ -35,7 +35,13 @@ const BILI_TOOL = fileURLToPath(new URL('../tools/bili.py', import.meta.url));
 const CRED_FILE = process.env.BILI_CRED || '';
 
 // 从**开头**切，不挖中间那段；时长按 QQ 语音上限留 1 秒余量
-const SEG_SEC = Number(process.env.VOICE_SEG_SEC ?? 59);
+// 2026-11-03 主人要求：唱歌不做时长限制，腾讯能发多长就发多长。
+// 实测 NapCat 收 120s / 240s 的 record 都回 retcode 0（真 message_id），
+// 所以默认段长从 59 秒放到 240 秒 —— 一首 4 分钟的歌一段就完，不用切 5 刀。
+// 2026-11-03 主人要求：整首一次处理、一次发，别在中间切。
+// 3600 秒 = 60 分钟内都当一整段 → need=1 → 只切一次（等于不切）、只调一次 /sing。
+// 若腾讯拒收超长语音（retcode 报错），改回 240 即可（VOICE_SEG_SEC=240）。
+const SEG_SEC = Number(process.env.VOICE_SEG_SEC ?? 3600);
 const MAX_AGE_DAYS = 7;
 
 /** 从插件凭证拼 Cookie（和 asr_cookie.py 一样的映射） */
@@ -156,9 +162,16 @@ async function singRemoteTo(file, out) {
     // 结果整首放成了原曲）。网络级失败重试 2 次再认输。
     // 每次尝试单独计时：以前三共用 300 秒的 controller，第一次 fetch 挂住就把
     // 整条消息堵死（2026-10-31 21:42，主人连发三条都没回应）
+    // 单次预算按段长给：240 秒的段，GPU 分离+换声要 60~90 秒，
+    // 原来固定 60 秒会在中途 abort（2026-11-03 20:53 就是「This operation was aborted」，
+    // 然后回落原曲 —— 主人听到杨丞琳）。段越长给越长，下限 90 秒。
+    const segSec = Number(process.env.VOICE_SEG_SEC ?? 240);
+    // 上限 5 分钟：段长现在等于整首（3600），不能按 0.9 倍算成 54 分钟，
+    // 否则一次挂死会把整条消息堵到天荒地老。
+    const ATTEMPT_MS = Math.min(300_000, Math.max(90_000, Math.round(segSec * 1000 * 0.9) + 30_000));
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 60_000);
+      const timer = setTimeout(() => ctrl.abort(), ATTEMPT_MS);
       try {
         r = await fetch(url.replace(/\/+$/, '') + '/sing', { method: 'POST', body: fd, signal: ctrl.signal });
         clearTimeout(timer);
@@ -177,7 +190,7 @@ async function singRemoteTo(file, out) {
       if (await healRvc(url)) {
         // 自愈已经把服务重新拉起来了，这次给它更长的预算（模型要重新加载）
         const ctrl2 = new AbortController();
-        const timer2 = setTimeout(() => ctrl2.abort(), 120_000);
+        const timer2 = setTimeout(() => ctrl2.abort(), ATTEMPT_MS + 60_000);
         try {
           r = await fetch(url.replace(/\/+$/, '') + '/sing', { method: 'POST', body: fd, signal: ctrl2.signal });
         } catch (e) { lastErr = e; } finally { clearTimeout(timer2); }
@@ -475,9 +488,21 @@ export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG, onSegment = 
     + ` ${pick.duration} | ${why.join('、')}`);
 
   // 缓存命中
-  const meta = (() => {
+  let meta = (() => {
     try { return JSON.parse(readFileSync(fullMetaPath(bvid), 'utf8')); } catch { return null; }
   })();
+  // 段长改过之后，旧切片必须作废（2026-11-03 事故：SEG_SEC 59→240 后仍按 5 段发，
+  // 因为缓存分支只看 meta.count，还用新的 240 去标「第 x 段」—— 5 段全标 240s）
+  if (meta && Number(meta.segSec) !== SEG_SEC) {
+    for (let i = 0; i < Number(meta.count || 0); i += 1) {
+      for (const f of [`${VOICE_DIR}/${bvid}_full_${i}.mp3`, `${VOICE_DIR}/${bvid}_full_${i}_her.mp3`]) {
+        try { unlinkSync(f) } catch { /* 忽略 */ }
+      }
+    }
+    try { unlinkSync(fullMetaPath(bvid)) } catch { /* 忽略 */ }
+    console.log(`  [voice] 段长 ${meta.segSec}s → ${SEG_SEC}s，旧切片作废重切`);
+    meta = null;
+  }
   if (meta && meta.count > 0) {
     const segs = [];
     for (let i = 0; i < meta.count; i += 1) {

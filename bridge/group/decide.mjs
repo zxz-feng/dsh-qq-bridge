@@ -43,6 +43,10 @@ export function decide({
   hotwords = [], hasImage = false, isOwner = false, isWhale = false,
 }) {
   // 被叫到 = @我 / 回复我 / 正文里出现它的名字（小鲸鱼、肥鱼大小姐…）
+  // 设置页里挂的「鲸鱼群友」名单：按 QQ 号认，比昵称可靠
+  const whaleRec = (policy.whales ?? []).find(
+    (w) => w && String(w.uin) === String(member.uin ?? '') && w.enabled !== false,
+  );
   const nicks = (policy.selfNick ?? ['小鲸鱼', '肥鱼大小姐']).filter(Boolean);
   const named = nicks.some((n) => n && text.includes(n));
   const hard = atMe || replyToMe || named;
@@ -58,7 +62,7 @@ export function decide({
   if ((member.affinity ?? 0) > 30) { score += 1; why.push('熟人'); }
   // 主人说话多留意一点：不加这条，他随口一句"你们多发点表情包"会被当成空气
   if (isOwner) { score += 1; why.push('主人'); }
-  if (isWhale) { score += 1; why.push('同类鲸鱼'); }
+  if (isWhale || whaleRec) { score += 1; why.push('同类鲸鱼'); }
   const coldAfter = Number(policy.coldAfterMin ?? 30) * 60;
   const cold = gapSec > coldAfter;
   if (cold) { score += 2; why.push('冷场'); }
@@ -86,7 +90,11 @@ export function decide({
   }
 
   // ── ④ 软触发：分数不够就不说（不补回）──
-  if (score < 2) {
+  // 2 分是默认门槛；调这个比调 replyProb 有用得多 ——
+  // 分数不到就连掷骰子的机会都没有（2026-11-04：主人把接话概率调到 3%，
+  // 结果那几条都是 0 分，压根没走到概率那一步）
+  const minScore = Number(policy.minScore ?? 2);
+  if (score < minScore) {
     return { speak: false, hard: false, score, prob: 0, reason: `分数不够（${score}）` };
   }
   // 额度和"连续被无视"只压主动插话 —— 被叫到时不该被这些挡住
@@ -113,7 +121,16 @@ export function decide({
   }
 
   // ── ⑥ 掷骰子 ──
-  const base = cold ? Number(policy.coldProb ?? 0.25) : Number(policy.replyProb ?? 0.08);
+  let base = cold ? Number(policy.coldProb ?? 0.25) : Number(policy.replyProb ?? 0.08);
+  // 单独给某个群友设概率（member.replyProb 优先级最高）
+  // 其次：别的鲸鱼（同类）可以有自己的概率，不用跟普通群友挤同一个 3%
+  if (whaleRec && Number.isFinite(Number(whaleRec.replyProb))) {
+    base = Number(whaleRec.replyProb);          // 名单里给这个人单独设的
+  } else if (Number.isFinite(Number(member.replyProb)) && member.replyProb !== null && member.replyProb !== '') {
+    base = Number(member.replyProb);
+  } else if ((isWhale || whaleRec) && Number.isFinite(Number(policy.whaleReplyProb))) {
+    base = Number(policy.whaleReplyProb);
+  }
   const aff = member.affinity ?? 0;
   const prob = Math.max(0, Math.min(1, base * (1 + aff / 200)));
   const roll = Math.random();

@@ -326,7 +326,9 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
     text: displayText,
     atMe,
     isOwner: commands.isOwner(uin, policy),
-    isWhale: members.isOtherWhale(name, policy.otherWhales?.pattern ?? '鲸鱼'),
+    // 昵称和群名片都要看：这个群的「呆呆的大肥鱼」是昵称，card 是空串，
+    // 只查显示名会漏 → 同类鲸鱼这一分从没加上过（2026-11-04 主人指出的）
+    isWhale: members.isOtherWhale(`${msg?.card ?? ''} ${name}`, policy.otherWhales?.pattern ?? '鲸鱼|肥鱼'),
     replyToMe,
     gapSec,
     policy: policyForDecide,
@@ -392,9 +394,21 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   const sil = commands.isSilenced(gid);
   if (sil) { console.log('  [group] 静默中，放弃这次回复'); return; }
 
+  // 语音要在**生成之前**就定下来：内容得按"说的话"来写，不能先写成文字再硬转
+  // （2026-11-04 主人指出：既然是发语音，就该以语音为前提想说什么）
+  const VOICE_AHEAD = /语音|声音|念一下|读一下|音色|说句话|说一句|用嘴说/;
+  const askedVoice = VOICE_AHEAD.test(msg.text || '');
+  // 自己想发就发：不用等别人要求，情绪上来/句子短的时候主动换语音
+  const proactiveVoice = !askedVoice && Math.random() < Number(policy.proactiveVoiceProb ?? 0.15);
+  const voiceAhead = askedVoice || proactiveVoice;
+  const VOICE_SYS = voiceAhead
+    ? '【这条会用语音发出去】你要说的是"话"，不是"字"：短句、口语、不用表情符号、别提打字/文字/发不发得出。'
+      + '像对着人说一遍，长度 10~40 字。'
+    : '';
+
   let out;
   try {
-    out = await generate({ gid, policy, msg });
+    out = await generate({ gid, policy, msg, hint: VOICE_SYS });
   } catch (e) {
     console.error('  [group] 生成失败:', e.message);
     return;
@@ -476,12 +490,31 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   // 兜底：只要模型回的是"我没嗓子/发不了"，无论要不要语音都换掉 ——
   // 这句话一旦发出去就进了上下文，下次她更信自己没嗓子（自我实现）。
   if (EXCUSE.test(out.parts.join(''))) {
-    const fix = plainFallback(msg.text);
-    out.parts = [fix];
-    console.log('  [group] 拦下"我没嗓子"台词 → 换成', fix);
+    // 只删掉"我没嗓子"那一句，别把正经内容一起扔掉
+    // （2026-11-04 实测：主人让它「自我介绍一下，用语音说」，它先写了句没嗓子，
+    //   整段被换成兜底句 → 自我介绍没了，只剩「我说话你听着呢吧」）
+    const keep = [];
+    for (const part of out.parts) {
+      for (const seg of String(part).split(/(?<=[。！？!?~～\n])/)) {
+        const t = seg.trim();
+        if (!t || EXCUSE.test(t)) continue;
+        keep.push(t);
+      }
+    }
+    if (keep.length) {
+      out.parts = [keep.join('')];
+      console.log('  [group] 删掉"没嗓子"那句，留下:', out.parts[0].slice(0, 40));
+    } else {
+      const fix = plainFallback(msg.text);
+      out.parts = [fix];
+      console.log('  [group] 整段都是推辞 → 换成', fix);
+    }
   }
   let voiced = false;
-  if (wantVoice) {
+  // 主动语音：句子够短才换（长段子念出来像听课）
+  const speakable = out.parts.join('').replace(/\[\[[^\]]*\]\]/g, '').trim();
+  const proactiveOk = proactiveVoice && speakable.length >= 6 && speakable.length <= 45;
+  if (wantVoice || proactiveOk) {
     // 有明确原话（引号 / 「内容是…」）就用原话；否则说模型自己写的那句 ——
     // 它写的一般比从请求里抠出来的碎片更像人话，也更长（主人嫌过太短）。
     const spoken0 = spokenPayload(msg.text) || out.parts.join('，').replace(/\s+/g, ' ').trim();

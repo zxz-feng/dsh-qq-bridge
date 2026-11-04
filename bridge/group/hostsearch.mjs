@@ -164,7 +164,10 @@ export async function hostSpeak(text, preset) {
   // 语音是一次性等待，慢一点也比失败好；真挂了插件自己会回落 Edge。
   const log = (m) => console.log(`  [voice] ${m}`);
   await ensureGsv(log);
-  let d = await call('/voice', { text: t, preset }, 90000);
+  // 2026-11-03 主人要求「不做时长限制」：文本可能上千字，原来的 90 秒会中途判死。
+  // 按字数给预算：底 90 秒 + 每字 150ms（实测 25 字 ≈ 8 秒，留足余量）。
+  const budget = Math.max(90000, 90000 + (t.length - 25) * 150);
+  let d = await call('/voice', { text: t, preset }, budget);
   if (d) return d;
   // 走到这里说明插件那头合成失败（多半是本地 GPT-SoVITS 半死）—— 硬重启再来一次，
   // 免得出门音色变成微软小艺。

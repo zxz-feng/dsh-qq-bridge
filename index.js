@@ -323,6 +323,8 @@ export function apply(ctx, config = {}) {
     }
     if (m === 'GET' && path === '/friends') return sendJson(res, 200, { ok: true, ...api.readFriends() })
     if (m === 'POST' && path === '/friends') return sendJson(res, 200, await api.writeFriend(body))
+    if (m === 'GET' && path === '/whales') return sendJson(res, 200, api.readWhales(url.searchParams.get('gid')))
+    if (m === 'POST' && path === '/whales') return sendJson(res, 200, await api.writeWhale(body))
     if (m === 'POST' && path === '/verify') return sendJson(res, 200, await api.verify())
     if (m === 'GET' && path === '/log') return sendJson(res, 200, { ok: true, tail: api.readLog(url.searchParams.get('lines') || 40) })
     if (m === 'GET' && path === '/qr') {

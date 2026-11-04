@@ -185,7 +185,7 @@ async function runTools({ reads, infos, looks, tiebas = [], hint = '' }) {
  * @param {object} o.msg      {uin, name, text, atMe, images:[{url,desc}]}
  * @returns {Promise<{parts:string[], stickers:string[], voices:string[], model:string, usage:object, searched:boolean}>}
  */
-export async function generate({ gid, policy = {}, msg, depth = 0, extra = '' }) {
+export async function generate({ gid, policy = {}, msg, depth = 0, extra = '', hint = '' }) {
   const pv = personaVersion();
   const state = loadPersonaState(gid);
   const isFirst = state.turns === 0;
@@ -266,6 +266,7 @@ export async function generate({ gid, policy = {}, msg, depth = 0, extra = '' })
 
   const userContent = `${ctxBlock}${searchBlock}${hotLine}\n\n【现在这条】${msg.name || msg.uin}: ${String(msg.text).slice(0, MAX_CHARS)}`;
 
+  if (hint) system.push('', hint)
   const messages = [
     { role: 'system', content: system },
     { role: 'user', content: userContent },
