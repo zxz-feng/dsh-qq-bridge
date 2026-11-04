@@ -252,6 +252,7 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
       stats0.awaitingReply = 0;
     } else if (store.nowSec() - stats0.awaitingReply > 120) {
       stats0.ignoredStreak = (stats0.ignoredStreak ?? 0) + 1;
+      stats0.streakAt = store.nowSec();
       stats0.awaitingReply = 0;
     }
     store.saveStats(gid, stats0);
@@ -324,17 +325,33 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
     ...bias.policy,
   };
 
+  const isWhale = members.isOtherWhale(`${evt?.sender?.card ?? ''} ${name}`, policy.otherWhales?.pattern ?? '鲸鱼|肥鱼');
+  // 「连续被无视」的时间衰减：安静够久就归零，给她重新开口的机会
+  const statsForDecide = store.loadStats(gid);
+  const decaySec = Math.max(60, Number(policy.ignoredDecayMin ?? 10) * 60);
+  // 老数据没有 streakAt（升级前攒的），一律当成「早就过期」直接归零，
+  // 不然升级后她会带着历史包袱继续哑火 —— 2026-11-04 主群正是这样
+  const noStamp = (statsForDecide.ignoredStreak ?? 0) > 0 && !Number(statsForDecide.streakAt ?? 0);
+  if ((statsForDecide.ignoredStreak ?? 0) > 0
+      && (noStamp || store.nowSec() - Number(statsForDecide.streakAt ?? 0) > decaySec)) {
+    const mins = noStamp ? '很久' : Math.round((store.nowSec() - Number(statsForDecide.streakAt)) / 60);
+    statsForDecide.ignoredStreak = 0;
+    statsForDecide.awaitingReply = 0;
+    store.saveStats(gid, statsForDecide);
+    console.log(`  [group] 安静了 ${mins} 分钟，「被无视」计数归零`);
+  }
+
   const d = decide({
     text: displayText,
     atMe,
     isOwner: commands.isOwner(uin, policy),
     // 昵称和群名片都要看：这个群的「呆呆的大肥鱼」是昵称，card 是空串，
     // 只查显示名会漏 → 同类鲸鱼这一分从没加上过（2026-11-04 主人指出的）
-    isWhale: members.isOtherWhale(`${evt?.sender?.card ?? ''} ${name}`, policy.otherWhales?.pattern ?? '鲸鱼|肥鱼'),
+    isWhale,
     replyToMe,
     gapSec,
     policy: policyForDecide,
-    stats: store.loadStats(gid),
+    stats: statsForDecide,
     member: hardTrigger ? { ...member, spamUntil: 0 } : member,
     lastSpoke: store.lastSpokeAt(gid),
     hotwords: hw,
@@ -716,7 +733,9 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   });
   const st = store.loadStats(gid);
   st.total = (st.total ?? 0) + out.parts.length;
-  if (!hard) st.active = (st.active ?? 0) + 1;
+  // 名单里的鲸鱼不占「主动发言」额度 —— 主人给它单独设了高回话率，
+  // 被每日 10 条的额度挡住就白设了（2026-11-04）
+  if (!hard && !isWhale) st.active = (st.active ?? 0) + 1;
   st.awaitingReply = store.nowSec();
   store.saveStats(gid, st);
   members.noteReply(msg.uin, out.parts.join(' '));

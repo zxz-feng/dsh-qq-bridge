@@ -382,6 +382,18 @@ console.log('\n【人设（QQ 群版）】')
 ok('换声缓存按歌存、不带段长', herFullPath('BV1sZywBxEHd').endsWith('_herfull.mp3'))
 ok('改段长不换文件名（GPU 只跑一次）', !herFullPath('BV1sZywBxEHd').includes('3600'))
 
+// 「连着被无视就闭嘴」必须有两个出口（2026-11-04 主群哑火的真因）
+{
+  const base = { replyProb: 1, coldProb: 1, dailyActive: 100, dailyTotal: 1000, cooldownSec: 0, minScore: 0, quietHours: [] }
+  const st = (n) => ({ total: 0, active: 0, ignoredStreak: n })
+  const d2 = decide({ text: '今天天气不错', atMe: false, isOwner: false, isWhale: false, replyToMe: false, gapSec: 30, policy: base, stats: st(2), member: {}, lastSpoke: 0, hotwords: [], now: 1000 })
+  ok('被无视 2 次还能说话（旧版这里永久闭嘴）', d2.speak === true || d2.reason?.includes('概率'))
+  const d3 = decide({ text: '今天天气不错', atMe: false, isOwner: false, isWhale: false, replyToMe: false, gapSec: 30, policy: base, stats: st(3), member: {}, lastSpoke: 0, hotwords: [], now: 1000 })
+  ok('被无视 3 次才闭嘴', d3.speak === false && /没人接话/.test(d3.reason))
+  const d5 = decide({ text: '今天天气不错', atMe: false, isOwner: false, isWhale: false, replyToMe: false, gapSec: 30, policy: { ...base, ignoredMax: 6 }, stats: st(5), member: {}, lastSpoke: 0, hotwords: [], now: 1000 })
+  ok('阈值可调（ignoredMax=6）', d5.speak === true || d5.reason?.includes('概率'))
+}
+
 // ── 汇总 ──────────────────────────────────────────────
 console.log(`\n=== ${pass} 通过 / ${fail} 失败 ===`)
 if (fail) { console.log(`失败项：${failures.join('、')}`); process.exit(1) }

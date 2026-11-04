@@ -88,6 +88,8 @@ export const EMPTY_GROUP_CFG = {
     engine: 'legacy',
     agentTimeoutMs: 60000,   // 单轮 agent 上限（含工具调用）
     slowHintSec: 18,         // 超过这么久还没出结果，先回一句"等下，我查查"（0=关）
+    ignoredMax: 3,           // 连着几句没人接话就先闭嘴（以前写死 2，太容易永久哑火）
+    ignoredDecayMin: 10,     // 安静多少分钟后把「被无视」计数归零
   },
   _note: '加群时在 groups 里写 {"群号": {"label": "测试群"}}，其余继承 defaults。',
 }

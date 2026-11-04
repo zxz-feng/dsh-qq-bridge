@@ -98,8 +98,13 @@ export function decide({
     return { speak: false, hard: false, score, prob: 0, reason: `分数不够（${score}）` };
   }
   // 额度和"连续被无视"只压主动插话 —— 被叫到时不该被这些挡住
-  if ((stats.ignoredStreak ?? 0) >= 2) {
-    return { speak: false, hard: false, score, prob: 0, reason: '连续被无视，先闭嘴' };
+  // 连着说几句没人接话就先闭嘴 —— 但必须有两个出口，否则一旦累积到 2 就再也不说话
+  // （2026-11-04：主群 ignoredStreak=4，鲸鱼说了十几句她一句没回，主人以为设置失效了）
+  //   ① 阈值可调（ignoredMax，默认 3）
+  //   ② 时间衰减：安静够久就归零（ignoredDecayMin，默认 10 分钟），由 router 落盘
+  const ignoredMax = Math.max(1, Number(policy.ignoredMax ?? 3));
+  if ((stats.ignoredStreak ?? 0) >= ignoredMax) {
+    return { speak: false, hard: false, score, prob: 0, reason: `连着 ${stats.ignoredStreak} 次没人接话，先歇会儿` };
   }
   if ((stats.active ?? 0) >= Number(policy.dailyActive ?? 4)) {
     return { speak: false, hard: false, score, prob: 0, reason: '今日主动发言额度用完' };
