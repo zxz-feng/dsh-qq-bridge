@@ -37,15 +37,16 @@ function pickCached() {
   return list[0];
 }
 
+// TG 的语音条要 ogg/opus 才稳（mp3 也能发，但偶尔被当"文件"）
 async function cut(src, sec) {
   if (!(sec > 0)) return src;
-  const dst = src.replace(/\.mp3$/, `_tg${sec}s.mp3`);
+  const dst = src.replace(/\.mp3$/, `_tg${sec}s.ogg`);
   if (existsSync(dst) && statSync(dst).size > 2000) return dst;
   try {
     await exec('ffmpeg', ['-y', '-loglevel', 'error', '-t', String(sec), '-i', src,
-      '-c:a', 'libmp3lame', '-b:a', '128k', dst]);
+      '-c:a', 'libopus', '-b:a', '48k', '-ar', '48000', '-ac', '1', '-f', 'ogg', dst]);
     return existsSync(dst) ? dst : src;
-  } catch (e) { log('截断失败，用整首：', e.message); return src }
+  } catch (e) { log('转 ogg 失败，退回原文件：', e.message); return src }
 }
 
 try {
