@@ -328,7 +328,7 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
     isOwner: commands.isOwner(uin, policy),
     // 昵称和群名片都要看：这个群的「呆呆的大肥鱼」是昵称，card 是空串，
     // 只查显示名会漏 → 同类鲸鱼这一分从没加上过（2026-11-04 主人指出的）
-    isWhale: members.isOtherWhale(`${msg?.card ?? ''} ${name}`, policy.otherWhales?.pattern ?? '鲸鱼|肥鱼'),
+    isWhale: members.isOtherWhale(`${evt?.sender?.card ?? ''} ${name}`, policy.otherWhales?.pattern ?? '鲸鱼|肥鱼'),
     replyToMe,
     gapSec,
     policy: policyForDecide,
