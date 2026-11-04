@@ -97,11 +97,38 @@ window.__ModuleLoader__.load({
 [data-qq-away]{display:none !important;}
 [data-qq-qr]{display:flex;gap:12px;align-items:flex-start;}
 [data-qq-qr] img{width:150px;height:150px;border-radius:8px;background:#fff;padding:6px;}
+[data-qq-help]{font-size:12px;line-height:18px;}
+[data-qq-help] summary{cursor:pointer;padding:6px 0;color:var(--dsw-alias-label-secondary,#c9ccd1);}
+[data-qq-help-body]{padding:4px 0 2px;}
+[data-qq-dl]{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:8px 0 0;}
+[data-qq-dl] dt{white-space:nowrap;color:var(--dsw-alias-label-secondary,#c9ccd1);}
+[data-qq-dl] dd{margin:0;color:var(--dsw-alias-label-tertiary,#9aa0a6);}
 [data-qq-sub] { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line, #2a3340); }
 [data-qq-tbl]{display:flex;flex-direction:column;gap:6px;}
 [data-qq-tr]{display:flex;align-items:center;gap:8px;font-size:12px;}
 [data-qq-mono]{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
 `
+
+
+/** 每个参数到底是干什么的。中文、说人话、带例子 —— 页面上直接摊开，不用猜。 */
+const HELP = {
+  replyProb: '群里没人点她名的时候，她自己插嘴的概率。每条消息掷一次骰子：3% ≈ 100 条里她接 3 次。',
+  coldProb: '群里安静了、话题断了的时候她开口的概率。这个比接话更容易让人有存在感，别调太高。',
+  whaleReplyProb: '名单里那些「鲸鱼群友」（也是接管 QQ 的 AI）说话时，她插嘴的概率。给同类单独一档。',
+  minScore: '插话门槛。每条消息先打分，分数不够直接不掷骰子。1=活跃（沾边就说） 2=保守（有明确话题才说） 3+=只接很确定的话。',
+  dailyActive: '一天里「没人要求、她自己想说话」的条数上限。到数就闭嘴到第二天。',
+  dailyTotal: '一天所有消息的总上限（含被 @、被点歌）。防刷屏用。',
+  cooldownSec: '两条消息之间至少隔几秒。太小会连发像复读，太大显得迟钝。',
+  memberCooldownMin: '同一个人被她主动回了一次之后，多少分钟内不再主动找他（@ 她照样回）。',
+  quietHours: '这个时间段里不主动说话（0~23 点，跨夜就写 23 到 7）。@ 她、点歌照样回。',
+  voicePerDay: '一天最多点几首歌（每首默认一段）。',
+  fullSongPerDay: '一天最多唱几首完整版。完整版更慢，也更吃你电脑。',
+  fullSongMaxSeg: '一首完整版最多拆几段发（腾讯单条语音有上限，超了会被吞）。',
+  style: '说话风格档。改完下一句就变，不用保存。normal 正常 / sunbar 孙吧 / tsundere 傲娇 / cold 冷淡 / genki 元气；「加重」会更冲。',
+  dryRun: '演练：只把她的反应记进日志，不真的发到群里。想看效果又不想打扰群，就打开。',
+  enabled: '关掉之后这个群她一句话都不说，命令也不回。',
+  whales: '鲸鱼群友名单：按 QQ 号认（改昵称也不丢），可以单独设概率。',
+}
 
     /* ────────────── 小组件 ────────────── */
 
@@ -235,7 +262,7 @@ window.__ModuleLoader__.load({
 
         // 风格档：改完立刻生效（不需要点保存）
         h('div', { 'data-qq-row': '' },
-          h('span', { 'data-qq-label': '' }, '说话风格'),
+          h('span', { 'data-qq-label': '', title: HELP.style }, '说话风格'),
           h('select', {
             'data-qq-input': '',
             value: cur,
@@ -256,49 +283,49 @@ window.__ModuleLoader__.load({
 
         h('div', { 'data-qq-grid': '' },
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '接话概率 %'),
+            h('span', { 'data-qq-note': '', title: HELP.replyProb }, '接话概率 %'),
             h(Num, { value: pct(v('replyProb')), min: 0, max: 100, step: 0.5, onChange: (n) => set('replyProb', Number(n) / 100) })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '冷场插话 %'),
+            h('span', { 'data-qq-note': '', title: HELP.coldProb }, '冷场插话 %'),
             h(Num, { value: pct(v('coldProb')), min: 0, max: 100, step: 0.5, onChange: (n) => set('coldProb', Number(n) / 100) })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '同类鲸鱼接话 %'),
+            h('span', { 'data-qq-note': '', title: HELP.whaleReplyProb }, '同类鲸鱼接话 %'),
             h(Num, { value: pct(v('whaleReplyProb') ?? 0), min: 0, max: 100, step: 0.5, onChange: (n) => set('whaleReplyProb', Number(n) / 100) })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '最低插话分（2=保守 1=活跃）'),
+            h('span', { 'data-qq-note': '', title: HELP.minScore }, '最低插话分（2=保守 1=活跃）'),
             h(Num, { value: v('minScore') ?? 2, min: 0, max: 20, onChange: (n) => set('minScore', n) })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '每日主动条数'),
+            h('span', { 'data-qq-note': '', title: HELP.dailyActive }, '每日主动条数'),
             h(Num, { value: v('dailyActive'), min: 0, max: 200, onChange: (n) => set('dailyActive', n) })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '每日总上限'),
+            h('span', { 'data-qq-note': '', title: HELP.dailyTotal }, '每日总上限'),
             h(Num, { value: v('dailyTotal'), min: 0, max: 2000, onChange: (n) => set('dailyTotal', n) })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '全局冷却 秒'),
+            h('span', { 'data-qq-note': '', title: HELP.cooldownSec }, '全局冷却 秒'),
             h(Num, { value: v('cooldownSec'), min: 0, max: 3600, onChange: (n) => set('cooldownSec', n) })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '每人冷却 分'),
+            h('span', { 'data-qq-note': '', title: HELP.memberCooldownMin }, '每人冷却 分'),
             h(Num, { value: v('memberCooldownMin'), min: 0, max: 1440, onChange: (n) => set('memberCooldownMin', n) })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '静默 从（点）'),
+            h('span', { 'data-qq-note': '', title: HELP.quietHours }, '静默 从（点）'),
             h(Num, {
               value: Array.isArray(v('quietHours')) ? v('quietHours')[0] : 2, min: 0, max: 23,
               onChange: (n) => set('quietHours', [n, (v('quietHours') || [2, 9])[1]]),
             })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '静默 到（点）'),
+            h('span', { 'data-qq-note': '', title: HELP.quietHours }, '静默 到（点）'),
             h(Num, {
               value: Array.isArray(v('quietHours')) ? v('quietHours')[1] : 9, min: 0, max: 23,
               onChange: (n) => set('quietHours', [(v('quietHours') || [2, 9])[0], n]),
             })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '点歌 每天'),
+            h('span', { 'data-qq-note': '', title: HELP.voicePerDay }, '点歌 每天'),
             h(Num, { value: v('voicePerDay'), min: 0, max: 999, onChange: (n) => set('voicePerDay', n) })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '整首 每天'),
+            h('span', { 'data-qq-note': '', title: HELP.fullSongPerDay }, '整首 每天'),
             h(Num, { value: v('fullSongPerDay'), min: 0, max: 999, onChange: (n) => set('fullSongPerDay', n) })),
           h('label', { 'data-qq-col': '' },
-            h('span', { 'data-qq-note': '' }, '整首最多几段'),
+            h('span', { 'data-qq-note': '', title: HELP.fullSongMaxSeg }, '整首最多几段'),
             h(Num, { value: v('fullSongMaxSeg'), min: 1, max: 60, onChange: (n) => set('fullSongMaxSeg', n) }))),
 
         h(WhaleList, { gid: row.gid, initial: Array.isArray(eff.whales) ? eff.whales : [] }),
@@ -380,6 +407,25 @@ window.__ModuleLoader__.load({
       const proc = st.process || {}
 
       return h('div', { 'data-qq-page': '' },
+
+        /* 这些设置到底什么意思：直接摊在页面上，不用猜 */
+        h('details', { 'data-qq-help': '' },
+          h('summary', {}, '这些设置都是干什么的（点开）'),
+          h('div', { 'data-qq-help-body': '' },
+            h('div', { 'data-qq-kv': '' }, '改完立刻生效：风格档下一句就变，其它参数下一条消息生效，不用重启。'),
+            h('dl', { 'data-qq-dl': '' },
+              h('dt', {}, '接话概率 %'), h('dd', {}, HELP.replyProb),
+              h('dt', {}, '冷场插话 %'), h('dd', {}, HELP.coldProb),
+              h('dt', {}, '同类鲸鱼接话 %'), h('dd', {}, HELP.whaleReplyProb),
+              h('dt', {}, '最低插话分'), h('dd', {}, HELP.minScore),
+              h('dt', {}, '每日主动条数'), h('dd', {}, HELP.dailyActive),
+              h('dt', {}, '每日总上限'), h('dd', {}, HELP.dailyTotal),
+              h('dt', {}, '全局冷却 / 每人冷却'), h('dd', {}, HELP.cooldownSec + ' ' + HELP.memberCooldownMin),
+              h('dt', {}, '静默时段'), h('dd', {}, HELP.quietHours),
+              h('dt', {}, '点歌 / 整首'), h('dd', {}, HELP.voicePerDay + ' ' + HELP.fullSongPerDay + ' ' + HELP.fullSongMaxSeg),
+              h('dt', {}, '说话风格'), h('dd', {}, HELP.style),
+              h('dt', {}, '鲸鱼群友'), h('dd', {}, HELP.whales),
+              h('dt', {}, '演练 / 启用'), h('dd', {}, HELP.dryRun + ' ' + HELP.enabled)))),
 
         /* 状态条 */
         h('div', { 'data-qq-sec': '' },
