@@ -19,6 +19,7 @@ import { homedir } from 'node:os'
 import { loadConfig, seedFiles, envFor, paths, loadAllowlist, loadGroupCfg, saveConfig } from './config.mjs'
 import { startControl } from './control.mjs'
 import { T } from '../lib/protocol.mjs'
+import { catchUp } from './catchup.mjs'
 import { getStyle, setStyle, listStyles } from './group/style.mjs'
 
 const HOME = process.env.BRIDGE_HOME || join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'qq-bridge')
@@ -94,6 +95,31 @@ function bumpCount() {
 let echoSeq = 0
 const waiters = new Map()
 
+// 断线期间错过的消息，连上后补回来（QQ 不会重发，只能自己去拉）
+const handledIds = new Set()
+async function catchUpMissed() {
+  try {
+    const allow = loadAllowlist(HOME)
+    const self = String(allow.self ?? '')
+    const friends = Object.keys(allow.friends ?? {}).filter((k) => allow.friends[k]?.enabled !== false)
+    const gc = loadGroupCfg()
+    const groups = Object.entries(gc.groups ?? {})
+      .filter(([, v]) => v && v.enabled !== false && v.dryRun !== true)
+      .map(([gid]) => gid)
+    await catchUp({
+      home: HOME,
+      callApi,
+      friends,
+      groups,
+      selfUin: self,
+      isSeen: (id) => handledIds.has(id),
+      onPrivate: async (evt) => { handledIds.add(String(evt.message_id)); await handlePrivate(evt) },
+      onGroup: async (evt) => { handledIds.add(String(evt.message_id)); await handleGroupMessage(evt, { callApi }) },
+      log,
+    })
+  } catch (e) { log(`[catchup] 出错: ${e?.message ?? e}`) }
+}
+
 function connect() {
   const c = reloadCfg()
   const url = c.onebot.token
@@ -104,6 +130,7 @@ function connect() {
   ws.on('open', () => {
     connected = true
     log(`[onebot] 已连接 ${c.onebot.url}`)
+    setTimeout(() => { void catchUpMissed() }, 2500)
   })
 
   ws.on('message', (data) => {
