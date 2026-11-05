@@ -121,7 +121,9 @@ export function toOutput(obj) {
   // 最多 4 条 —— 再多就不是聊天，是刷屏了。
   const reply = String(obj.reply ?? '').replace(/\r/g, '').trim()
   if (obj.silence === true || !reply) { out.passed = true; return out }
-  const chunks = reply.split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 4)
+  // 两条路的分隔符都要认：人设里教的是 `|||`（老约定），新 prompt 里教的是换行。
+  // 2026-11-05 群里看到 `骂谁呀，我又没招你|||再说就咬你` 就是只认 \n 造成的。
+  const chunks = reply.split(/\|\|\||\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 4)
   out.parts = chunks.length ? chunks : [reply]
   // 语音只能是"一段话"，所以多段时合并成一句，交给 router 只发一条语音
   if (obj.voice === true) out.voices = [chunks.join('，')]

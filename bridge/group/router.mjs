@@ -543,6 +543,8 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   const plainFallback = (seed) => SPEAK_FALLBACK[Math.abs([...String(seed)].reduce((a, c) => a + c.charCodeAt(0), 0)) % SPEAK_FALLBACK.length];
 
   const wantVoice = VOICE_HINT.test(msg.text || '');
+  // agent 自己决定「这条用语音发」—— 它的 JSON 里 voice:true 已经变成 out.voices
+  const agentVoice = out.agent && out.voices.length > 0 ? String(out.voices[0]) : '';
   // 兜底：只要模型回的是"我没嗓子/发不了"，无论要不要语音都换掉 ——
   // 这句话一旦发出去就进了上下文，下次她更信自己没嗓子（自我实现）。
   if (EXCUSE.test(out.parts.join(''))) {
@@ -570,10 +572,12 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   // 主动语音：句子够短才换（长段子念出来像听课）
   const speakable = out.parts.join('').replace(/\[\[[^\]]*\]\]/g, '').trim();
   const proactiveOk = proactiveVoice && speakable.length >= 6 && speakable.length <= 45;
-  if (wantVoice || proactiveOk) {
+  if (wantVoice || proactiveOk || agentVoice) {
     // 有明确原话（引号 / 「内容是…」）就用原话；否则说模型自己写的那句 ——
     // 它写的一般比从请求里抠出来的碎片更像人话，也更长（主人嫌过太短）。
-    const spoken0 = spokenPayload(msg.text) || out.parts.join('，').replace(/\s+/g, ' ').trim();
+    const spoken0 = agentVoice
+      || spokenPayload(msg.text)
+      || out.parts.join('，').replace(/\s+/g, ' ').trim();
     const spoken = EXCUSE.test(spoken0) ? plainFallback(msg.text) : spoken0;
     const v = await hostSpeak(spoken, policy.voicePreset);
     if (v?.path) {
@@ -656,10 +660,11 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     }
   }
 
-  // 语音：**只走确定性点歌**，模型自己塞的 [[voice:]] 一律不执行。
-  // 之前就是这个口子让它在闲聊里乱发语音（"搞错号了" → 发了一首歌）。
-  if (out.voices.length) {
-    console.log(`  [group] 模型想发语音（${out.voices[0]}）→ 已忽略（语音只走点歌流程）`);
+  // 语音：agent 模式下 `voice:true` 是她的显式决定，要执行；
+  // 老路径 model 塞的 [[voice:]] 仍然忽略（2026-10 就是那个口子让它乱发语音，
+  // "搞错号了" 都去发了一首歌）。
+  if (out.voices.length && !out.agent) {
+    console.log(`  [group] 模型想发语音（${out.voices[0]}）→ 已忽略（老路径语音只走点歌流程）`);
   }
 
   // ── 模型自主要唱（2026-10-28）──

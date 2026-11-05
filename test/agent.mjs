@@ -28,5 +28,26 @@ ok(toOutput({ reply: '第一段\n第二段\n第三段' }).parts.length === 3, '�
 ok(toOutput({ reply: '1\n2\n3\n4\n5\n6' }).parts.length === 4, '最多四条，别刷屏')
 ok(toOutput({ reply: '很长的一句话'.repeat(40) }).parts[0].length > 60, '长回复不截断')
 
+console.log('===== 分段与语音（2026-11-05 群里看到 ||| 漏进正文）=====')
+{
+  const o = toOutput({ reply: '骂谁呀，我又没招你|||再说就咬你' })
+  ok(o.parts.length === 2, '||| 要拆成两条')
+  ok(o.parts[0] === '骂谁呀，我又没招你' && o.parts[1] === '再说就咬你', '||| 拆分后不留分隔符')
+}
+{
+  const o = toOutput({ reply: '第一句\n第二句' })
+  ok(o.parts.length === 2, '换行也要拆成两条')
+}
+{
+  const o = toOutput({ reply: '啊这|||真的假的|||别吧|||算了|||还有一句' })
+  ok(o.parts.length === 4, '最多 4 条，多余的丢掉')
+}
+{
+  const o = toOutput({ reply: '在呢', voice: true })
+  ok(o.voices.length === 1 && o.voices[0] === '在呢', 'voice:true 要把正文带进 voices')
+  ok(o.agent === true, 'agent 标记要留着（router 靠它决定执不执行语音）')
+}
+
 console.log(`\n===== ${fail ? '✗' : '✓'} agent 解析 ${pass} 通过 / ${fail} 失败 =====`)
 process.exit(fail ? 1 : 0)
+
