@@ -226,7 +226,24 @@ async function runAgentInner({ chatKey, prompt, policy = {}, log = console.log }
     : DEFAULT_MODELS
   const timeoutMs = Math.min(180_000, Math.max(20_000, Number(policy.agentTimeoutMs) || 60_000))
   const sessions = loadSessions()
-  let sessionId = sessions[chatKey] || ''
+  // 会话表兼容两种形态：老的直接存字符串，新的存 {sid,turns}
+  const rec = (() => {
+    const v = sessions[chatKey]
+    if (!v) return { sid: '', turns: 0 }
+    if (typeof v === 'string') return { sid: v, turns: 0 }
+    return { sid: String(v.sid || ''), turns: Number(v.turns || 0) }
+  })()
+  // 轮换：一件聊天聊太久，DSH 会话里的历史会一直长大，每轮都要重发一遍。
+  // 上下文本来每轮都由 window + 摘要重新注入，所以换会话不会"失忆"。
+  const maxTurns = Math.max(10, Number(policy.agentMaxTurns ?? 40))
+  if (rec.turns >= maxTurns) {
+    log(`  [agent] 这个聊天已经聊了 ${rec.turns} 轮，换个新会话（旧的不删，只不再续）`)
+    rec.sid = ''
+    rec.turns = 0
+    sessions[chatKey] = { sid: '', turns: 0 }
+    saveSessions(sessions)
+  }
+  let sessionId = rec.sid
 
   let lastErr = ''
   for (const m of models) {
@@ -236,7 +253,8 @@ async function runAgentInner({ chatKey, prompt, policy = {}, log = console.log }
       const ms = Date.now() - t0
       if (r.sessionId && r.sessionId !== sessionId) {
         sessionId = r.sessionId
-        sessions[chatKey] = sessionId
+        sessions[chatKey] = { sid: sessionId, turns: rec.turns + 1 }
+        rec.turns += 1
         saveSessions(sessions)
       }
       if (r.ok) {
@@ -252,6 +270,7 @@ async function runAgentInner({ chatKey, prompt, policy = {}, log = console.log }
         out.usage = r.usage || null
         out.tools = r.tools
         out.sessionId = sessionId
+        out.sessionTurns = rec.turns
         out.ms = ms
         log(`  [agent] L${m.level} ${m.model} 成功（${ms}ms${r.tools.length ? `，工具 ${r.tools.join(',')}` : ''}）`)
         return out

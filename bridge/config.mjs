@@ -97,6 +97,7 @@ export const EMPTY_GROUP_CFG = {
     contextHours: 3,         // 只要最近几小时的（再早的靠摘要）
     contextChars: 6000,      // 这段原文的字数上限，超了从最旧的丢
     distillEvery: 20,        // 每多少条刷新一次摘要（0=只靠时间）
+    agentMaxTurns: 40,       // 同一个 DSH 会话聊到这么多轮就换新的（防会话无限长大）
   },
   _note: '加群时在 groups 里写 {"群号": {"label": "测试群"}}，其余继承 defaults。',
 }

@@ -473,6 +473,9 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
         maxChars: Number(policy.contextChars ?? 6000),
       });
       const winBlock = recent ? `[刚才群里]\n${recent}\n\n` : '';
+      // 每轮把"带了多少上下文"打一行：以后调参、查"她为什么没接上"都看这行
+      if (recent) console.log(`  [ctx] 带上下文 ${recent.split('\n').length} 条 / ${recent.length} 字`);
+      else console.log('  [ctx] 窗口是空的（这条是第一句）');
       const prompt = `${prefix}${winBlock}${memory.formatTurn({ who: name || uin, text: msg.text })}\n`
         + (VOICE_SYS ? `${VOICE_SYS}\n` : '');
       const slowSec = Number(policy.slowHintSec ?? 18);

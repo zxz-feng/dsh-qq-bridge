@@ -136,6 +136,9 @@ async function gsvHardRestart(url, log = () => {}) {
   return false;
 }
 
+// 严格模式：只发她自己的嗓子（.wav=GPT-SoVITS），不要微软小艺冒充
+const STRICT = process.env.VOICE_STRICT !== '0'
+
 async function ensureGsv(log = () => {}) {
   const url = gsvUrl();
   if (!url) return;
@@ -168,10 +171,23 @@ export async function hostSpeak(text, preset) {
   // 按字数给预算：底 90 秒 + 每字 150ms（实测 25 字 ≈ 8 秒，留足余量）。
   const budget = Math.max(90000, 90000 + (t.length - 25) * 150);
   let d = await call('/voice', { text: t, preset }, budget);
+  // 主人 2026-11-05：「群里语音是不是用的自己的模型」
+  // 插件合成失败时会回落微软小艺（.mp3），那就不是她的嗓子了 —— 宁可不出声，
+  // 也别让人以为那是她在说话。policy.voiceStrict=false 才允许回落。
+  if (d && STRICT && /\.mp3$/i.test(String(d.path ?? ''))) {
+    log('这轮只合成出 Edge 小艺（.mp3），按严格模式丢掉，改发文字');
+    return null;
+  }
   if (d) return d;
   // 走到这里说明插件那头合成失败（多半是本地 GPT-SoVITS 半死）—— 硬重启再来一次，
   // 免得出门音色变成微软小艺。
   const url = gsvUrl();
-  if (url && (await gsvHardRestart(url, log))) d = await call('/voice', { text: t, preset }, 90000);
+  if (url && (await gsvHardRestart(url, log))) {
+    d = await call('/voice', { text: t, preset }, 90000);
+    if (d && STRICT && /\.mp3$/i.test(String(d.path ?? ''))) {
+      log('重启后还是只有 Edge 小艺，按严格模式丢掉');
+      return null;
+    }
+  }
   return d;
 }
