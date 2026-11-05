@@ -102,7 +102,7 @@ async function catchUpMissed() {
     const allow = loadAllowlist(HOME)
     const self = String(allow.self ?? '')
     const friends = Object.keys(allow.friends ?? {}).filter((k) => allow.friends[k]?.enabled !== false)
-    const gc = loadGroupCfg()
+    const gc = loadGroupCfg(HOME)
     const groups = Object.entries(gc.groups ?? {})
       .filter(([, v]) => v && v.enabled !== false && v.dryRun !== true)
       .map(([gid]) => gid)

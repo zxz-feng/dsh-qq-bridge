@@ -781,7 +781,7 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   st.total = (st.total ?? 0) + out.parts.length;
   // 名单里的鲸鱼不占「主动发言」额度 —— 主人给它单独设了高回话率，
   // 被每日 10 条的额度挡住就白设了（2026-11-04）
-  if (!hard && !isWhale) st.active = (st.active ?? 0) + 1;
+  if (!hard && !out.isWhale) st.active = (st.active ?? 0) + 1;
   st.awaitingReply = store.nowSec();
   store.saveStats(gid, st);
   members.noteReply(msg.uin, out.parts.join(' '));
