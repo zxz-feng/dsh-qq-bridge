@@ -23,7 +23,7 @@ const shared = readFileSync(memory._paths.sharedOf('qq'), 'utf8')
 ok(!shared.includes('天气不错'), '闲聊不进事实卡')
 
 const pre = memory.buildPrefix({ platform: 'qq', chatKey: 'g1' })
-ok(pre.includes('共享记忆') && pre.includes('下周三'), '别的会话也能看到这条事实')
+ok(pre.includes('关于群里的人') && pre.includes('下周三'), '别的会话也能看到这条事实')
 
 memory.noteTurn({ platform: 'qq', chatKey: 'g1', who: 'A', text: '在吗', reply: '在' })
 const log = readFileSync(memory._paths.logOf('qq', 'g1'), 'utf8')

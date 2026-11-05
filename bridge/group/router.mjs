@@ -30,12 +30,39 @@ import { hostSpeak } from './hostsearch.mjs';
 import { stage } from './paths.mjs';
 import { runAgent } from './agent.mjs';
 import * as memory from './memory.mjs';
+import * as win from './window.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
 // 群策略文件：插件里由 GROUP_CFG 指过来（家目录），独立跑时退回同目录
 const CFG_FILE = process.env.GROUP_CFG || (DIR + '../group-allowlist.json');
 
 export const SELF = String(process.env.SELF_QQ ?? '');
+
+// ── 原文窗口 ───────────────────────────────────────────────
+// 主人 2026-11-05：「不要省那点 token，我要能正常聊天、不会之前说了什么马上就忘」
+// 之前组 prompt 只有「人设 + 当前这一句」，她根本看不见别人刚说过什么。
+// 现在每条入站都落窗口（不管说不说），组 prompt 时整段带上。
+function winPushInbound({ gid, evt, name, uin, parsed, text }) {
+  try {
+    win.push({
+      gid,
+      id: evt?.message_id,
+      t: Number(evt?.time) || undefined,
+      uin,
+      name,
+      text,
+      at: parsed?.at ?? [],
+      img: parsed?.images?.length ? `[图片×${parsed.images.length}]` : '',
+    });
+  } catch { /* 窗口失败不影响回话 */ }
+}
+
+/** 她自己的话也记一笔，否则窗口里只有别人在说话 */
+function winPushSelf(gid, text, kind = '') {
+  const t = String(text ?? '').trim();
+  if (!t) return;
+  try { win.push({ gid, self: true, name: '小鲸鱼', text: t, kind }); } catch { /* ignore */ }
+}
 
 /** 读配置（每次现读，改完即时生效，不用重启） */
 export function loadConfig() {
@@ -140,6 +167,9 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
 
   const parsed = parseCQ(evt.message ?? rawMsg);
   const text = (parsed.text ?? '').trim();
+
+  // 落原文窗口：不管这条最后说不说，别人说过什么都要留下
+  winPushInbound({ gid, evt, name, uin, parsed, text });
 
   // 上一条问过「搜到《X》，唱这个？」，这条就是答复
   const pkey = `${gid}:${uin}`;
@@ -435,7 +465,15 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
         personaText: shortPersona(gid),
         who: name,
       });
-      const prompt = `${prefix}${memory.formatTurn({ who: name || uin, text: msg.text })}\n`
+      // 刚才群里聊了什么（原文，带说话人/@ 对象）—— 她接不上话就是因为缺这一段
+      const recent = win.render(win.load(gid), {
+        excludeId: evt?.message_id,
+        maxMsgs: Number(policy.contextMsgs ?? 120),
+        hours: Number(policy.contextHours ?? 3),
+        maxChars: Number(policy.contextChars ?? 6000),
+      });
+      const winBlock = recent ? `[刚才群里]\n${recent}\n\n` : '';
+      const prompt = `${prefix}${winBlock}${memory.formatTurn({ who: name || uin, text: msg.text })}\n`
         + (VOICE_SYS ? `${VOICE_SYS}\n` : '');
       const slowSec = Number(policy.slowHintSec ?? 18);
       let hintTimer = null;
@@ -590,7 +628,7 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
         const ok = sendOk(r);
         console.log(`  [group] 语音${ok ? '已发' : '发送失败'}`);
         if (!ok) console.error('          ', JSON.stringify(r).slice(0, 200));
-        if (ok) { store.pushSentId(gid, r?.data?.message_id); voiced = true; }
+        if (ok) { store.pushSentId(gid, r?.data?.message_id); voiced = true; winPushSelf(gid, spoken, 'voice'); }
       }
       if (dry) voiced = true;
     } else {
@@ -622,7 +660,7 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
     } else {
       const r = await callApi('send_group_msg', { group_id: Number(gid), message: body });
       const ok = sendOk(r);
-      if (ok) store.pushSentId(gid, r?.data?.message_id);
+      if (ok) { store.pushSentId(gid, r?.data?.message_id); winPushSelf(gid, out.parts[i]); }
       console.log(`  [group] ${ok ? '已发' : '发送失败'}: ${out.parts[i]}`);
       if (!ok) console.error('          ', JSON.stringify(r).slice(0, 200));
     }
@@ -638,7 +676,7 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
       else {
         const r = await callApi('send_group_msg', { group_id: Number(gid), message: imageCQ(st.path) });
         const ok = sendOk(r);
-        if (ok) store.rememberMedia(gid, r?.data?.message_id, { desc: st.desc, name: '小鲸鱼', kind: '表情包' });
+        if (ok) { store.rememberMedia(gid, r?.data?.message_id, { desc: st.desc, name: '小鲸鱼', kind: '表情包' }); winPushSelf(gid, st.desc, 'sticker'); }
         console.log(`  [group] 表情包${ok ? '已发' : '发送失败'}: ${st.desc}`);
         if (!ok) console.error('          ', JSON.stringify(r).slice(0, 200));
       }
@@ -883,7 +921,7 @@ async function runFullSong({ query, pick = null }, { gid, uin, name, policy, cal
     if (dry) { console.log(`  [dry-run] 会发第 ${seg.index + 1} 段: ${seg.path}`); streamed += 1; return; }
     const rr = await callApi('send_group_msg', { group_id: Number(gid), message: recordCQ(seg.path) });
     const ok = sendOk(rr);
-    if (ok) store.pushSentId(gid, rr?.data?.message_id);
+    if (ok) { store.pushSentId(gid, rr?.data?.message_id); winPushSelf(gid, `（唱了 ${q} 第 ${seg.index + 1} 段）`, 'sing'); }
     streamed += 1;
     console.log(`  [group] 第 ${seg.index + 1}/${seg.total} 段${ok ? '已发' : '发送失败'}（${seg.sec}s）`);
     if (!ok) console.error('          ', JSON.stringify(rr).slice(0, 160));
