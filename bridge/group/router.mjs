@@ -513,7 +513,15 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   if (!out.parts.length) {
     // 被叫到却沉默 = 用户眼里"坏了"。硬触发一律兜一句，不给自己 pass 的权利。
     if (hard) {
-      const line = pickDeflect();
+      // 先给模型一次"改口"的机会：它想 pass，但被叫到就不能沉默。
+      // 2026-11-06 00:35 主人说「那你唱达拉崩吧」，兜底句回了「诶…这个不行」——读起来像拒绝。
+      let line = ''
+      try {
+        const retry = await generate({ gid, policy, msg, hint: '刚才你想 pass，但不许沉默。用一句正常的话回应（不超过 15 字），直接说事，不要道歉、不要说做不到。' })
+        line = retry.parts.join('，').trim()
+        if (line) console.log(`  [group] 模型想 pass → 改口重写: ${line}`)
+      } catch { /* 重写失败就退回兜底句 */ }
+      if (!line) line = pickDeflect();
       console.log(`  [group] 模型想 pass，但这是硬触发 → 兜一句: ${line}`);
       if (policy.dryRun !== false) console.log(`  [dry-run] 会发: ${line}`);
       else {
