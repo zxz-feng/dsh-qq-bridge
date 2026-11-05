@@ -10,8 +10,10 @@
 import { join } from 'node:path'
 import { readFileSync, writeFileSync } from 'node:fs'
 
-const RECOVER_SEC = 600      // 首次运行最多回看多少秒
-const MAX_AGE_SEC = 1800     // 任何时候都不处理 30 分钟以前的消息
+// 私聊丢一条就是彻底丢了（主人等的是回话），所以窗口放宽到 1 小时；
+// 群消息回放容易变成"复读"，窗口收紧到 10 分钟。
+const PRIVATE_SEC = 3600
+const GROUP_SEC = 600
 const COUNT = 8              // 每个聊天拉几条
 
 export function fileOf(home) { return join(home, 'lastseen.json') }
@@ -29,12 +31,12 @@ export function saveLastSeen(home, map) {
  * @param {Array} list OneBot 返回的消息数组
  * @param {object} opt {sinceSec, nowSec, peer, selfUin, isSeen}
  */
-export function pickMissed(list, { sinceSec, nowSec, peer, selfUin, isSeen = () => false }) {
+export function pickMissed(list, { sinceSec, nowSec, peer, selfUin, maxAgeSec = 1800, isSeen = () => false }) {
   const out = []
   for (const m of Array.isArray(list) ? list : []) {
     const t = Number(m?.time ?? 0)
     if (!t || t <= sinceSec) continue
-    if (nowSec - t > MAX_AGE_SEC) continue
+    if (nowSec - t > maxAgeSec) continue
     const who = String(m?.sender?.user_id ?? '')
     if (peer != null && who !== String(peer)) continue          // 私聊：只要对方说的
     if (peer == null && selfUin != null && who === String(selfUin)) continue  // 群：别把自己的话当新消息
@@ -56,12 +58,12 @@ export async function catchUp({ home, callApi, friends = [], groups = [], isSeen
   const nowSec = Math.floor(Date.now() / 1000)
   let n = 0
 
-  const step = async (key, fetch, handle, peerOf) => {
-    const since = Number(seen[key] ?? nowSec - RECOVER_SEC)
+  const step = async (key, fetch, handle, peerOf, windowSec = GROUP_SEC) => {
+    const since = Number(seen[key] ?? nowSec - windowSec)
     let list = []
     try { list = histList(await fetch()) } catch { return }
     const peer = peerOf()
-    const missed = pickMissed(list, { sinceSec: since, nowSec, peer, selfUin, isSeen })
+    const missed = pickMissed(list, { sinceSec: since, nowSec, peer, selfUin, maxAgeSec: windowSec, isSeen })
     for (const m of missed) {
       try {
         await handle({
@@ -89,6 +91,7 @@ export async function catchUp({ home, callApi, friends = [], groups = [], isSeen
       () => callApi('get_friend_msg_history', { user_id: Number(uin), count: COUNT }),
       onPrivate,
       () => String(uin),
+      PRIVATE_SEC,
     )
   }
 

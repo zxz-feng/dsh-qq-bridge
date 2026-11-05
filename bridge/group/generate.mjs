@@ -282,9 +282,11 @@ export async function generate({ gid, policy = {}, msg, depth = 0, extra = '', h
 
   const userContent = `${ctxBlock}${searchBlock}${hotLine}\n\n【现在这条】${msg.name || msg.uin}: ${String(msg.text).slice(0, MAX_CHARS)}`;
 
-  if (hint) system.push('', hint)
+  // system 是 join 出来的字符串，不是数组 —— 这里曾经写 push 导致
+  // 「生成失败: system.push is not a function」，语音/长回复整条挂掉（2026-11-06 00:24）。
+  const sysText = hint ? `${system}\n\n${hint}` : system
   const messages = [
-    { role: 'system', content: system },
+    { role: 'system', content: sysText },
     { role: 'user', content: userContent },
     { role: 'system', content: ANCHOR },
   ];
