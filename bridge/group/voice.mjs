@@ -493,13 +493,18 @@ export async function makeVoiceByRef(ref) {
     if (!r.ok || !r.bvid) return { ok: false, reason: '这个 av 号查不到视频' };
     bvid = r.bvid;
   }
-  if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) return { ok: false, reason: 'BV 号格式不对' };
+  if (!/^BV[0-9A-Za-z]{10}$/i.test(bvid)) return { ok: false, reason: 'BV 号格式不对' };
 
   // 大小写打错很常见（bvid 区分大小写），查不到就换写法重试
+  // ⚠️ 只认「服务端回报的 bvid 和输入一致」的那一次。
+  // bilibili_api 对全小写 bvid 会抛 ArgsException，而 downloadByApi / 换声用的是原始字符串，
+  // 拿错的 bvid 会换出一段完全不相干的音频（实测 137s 的歌换出 28s）。
   let info = null;
   for (const v of bvVariants(bvid)) {
     const r = await runBili(['info', v]);
-    if (r.ok && r.title) { info = r; bvid = v; break; }
+    const back = String(r?.bvid || '');
+    if (r.ok && r.title && back.toLowerCase() === v.toLowerCase()) { info = r; bvid = back; break; }
+    if (r.ok && r.title && !info) info = r;   // 先记着，全部失败时再兜底
   }
   if (!info) return { ok: false, reason: '这条视频查不到（可能已删除或仅限登录观看）' };
 

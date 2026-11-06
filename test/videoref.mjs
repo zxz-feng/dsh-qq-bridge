@@ -28,7 +28,7 @@ ok(looksLikeVideoOrder('今天好热') === null, '无关')
 // BV 号大小写兜底（用户手打常全小写，bvid 区分大小写）
 ok(normBvid('bv1yf9sbtehp') === 'bv1yf9sbtehp', '小写原样保留（不改大小写）')
 const vs = bvVariants('bv1yf9sbtehp')
-ok(vs.length >= 2 && vs.includes('BV1YF9SBTEHP'), '给大小写变体')
+ok(vs.length === 2 && vs.every((x) => x.slice(2) === '1yf9sbtehp'), '只把前缀归一，后 10 位原样（不同大小写是不同的视频）')
 ok(bvVariants('乱码').length === 1, '不是 BV 就原样')
 
 console.log(`\n视频引用：${pass} 通过 / ${fails.length} 失败`)

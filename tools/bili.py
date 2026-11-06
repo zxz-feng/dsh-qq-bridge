@@ -106,7 +106,8 @@ async def cmd_info(bvid):
     info = await v.get_info()
     return {
         'ok': True,
-        'bvid': bvid,
+        # 用服务端回报的 bvid：用户手打全小写时 B 站会解析成别的稿件，官方写法才安全
+        'bvid': info.get('bvid') or bvid,
         'title': clean(info.get('title')),
         'duration': info.get('duration', 0),
         'author': (info.get('owner') or {}).get('name', ''),

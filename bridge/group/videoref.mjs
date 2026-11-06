@@ -66,7 +66,10 @@ function orderWordsLoose(text) {
 export function bvVariants(bv) {
   const v = String(bv || '').trim()
   if (!/^BV[0-9A-Za-z]{10}$/i.test(v)) return [v].filter(Boolean)
-  return [...new Set([v, 'BV' + v.slice(2), 'BV' + v.slice(2).toUpperCase(), 'BV' + v.slice(2).toLowerCase()])]
+  // ⚠️ 不能瞎试大小写：B 站 bvid 是大小写敏感的，同一串不同大小写是**不同的视频**
+  // （实测 BV19e411E7mY 是一首中文歌，BV19e411e7my 是另一条 28 秒的短视频）。
+  // 只能把前缀 BV 归一，后面 10 位必须原样。
+  return [v, 'BV' + v.slice(2)]
 }
 
 export { ORDER_WORDS }
