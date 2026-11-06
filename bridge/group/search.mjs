@@ -82,7 +82,7 @@ function decodeEntities(s) {
 
 // ── B站 ─────────────────────────────────────────────────
 
-function runBili(args, timeout = 25000) {
+export function runBili(args, timeout = 25000) {
   // 没装那个 python 环境就跳过 B站这一路（其余搜索源照常）
   if (!PY) return Promise.resolve({ ok: false, error: 'no-python' });
   return exec(PY, [BILI_TOOL, ...args], { timeout, maxBuffer: 4 * 1024 * 1024 })

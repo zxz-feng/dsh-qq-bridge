@@ -14,7 +14,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { biliSearch, biliInfo } from './search.mjs';
+import { bvVariants } from './videoref.mjs';
+import { biliSearch, biliInfo, runBili } from './search.mjs';
 import { pickSongVideo, judgeSong } from './songpick.mjs';
 import { STORE } from './store.mjs';
 import { HOST_MEDIA, toFileUrl } from './paths.mjs';
@@ -473,6 +474,62 @@ export async function previewSong(query) {
   const sel = await pickSongVideo(kw, { title: kw, version });
   if (!sel.ok) return { ok: false, reason: sel.reason };
   return { ok: true, pick: sel.pick, why: sel.why ?? [] };
+}
+
+/**
+ * 直接用 BV 号/av 号拿音频 —— 不走搜索、不打分。
+ *
+ * 为什么要有这条：一首歌在 B 站几十个版本，标题筛选永远有猜错的可能。
+ * 主人直接甩链接就没歧义了（2026-11-06 要求：「我发链接或者 BV 号，你去找对应的视频」）。
+ *
+ * @param {{bvid?:string, avid?:number, page?:number}} ref
+ */
+export async function makeVoiceByRef(ref) {
+  gc();
+  let bvid = String(ref?.bvid ?? '').trim();
+  let page = Number(ref?.page ?? 0) || 0;
+  if (!bvid && ref?.avid) {
+    const r = await runBili(['avid', String(ref.avid)]);
+    if (!r.ok || !r.bvid) return { ok: false, reason: '这个 av 号查不到视频' };
+    bvid = r.bvid;
+  }
+  if (!/^BV[0-9A-Za-z]{10}$/.test(bvid)) return { ok: false, reason: 'BV 号格式不对' };
+
+  // 大小写打错很常见（bvid 区分大小写），查不到就换写法重试
+  let info = null;
+  for (const v of bvVariants(bvid)) {
+    const r = await runBili(['info', v]);
+    if (r.ok && r.title) { info = r; bvid = v; break; }
+  }
+  if (!info) return { ok: false, reason: '这条视频查不到（可能已删除或仅限登录观看）' };
+
+  const total = Number(info.duration) || 0;
+  if (total > 0 && total < 8) return { ok: false, reason: '这条太短了，不像歌' };
+  if (page > 1 && total === 0) page = 0;   // 多 P 的时长拿不到就按整条来
+
+  console.log(`  [voice] 指定视频 ${bvid}「${String(info.title).slice(0, 36)}」${fmtSec(total)}`);
+
+  const full = await ensureHerFull(bvid);
+  let dur = SEG_SEC;
+  const tot = Number(full.total) || total;
+  if (tot > 0 && tot < dur) dur = Math.max(10, tot - 1);
+
+  let path;
+  try { path = await cutForSend(bvid, 0, dur); }
+  catch (e) { return { ok: false, reason: '切段失败: ' + e.message }; }
+  if (statSync(path).size < 2000) return { ok: false, reason: '切出来的文件太小，可能没声音' };
+
+  rememberSong(bvid, { title: String(info.title).replace(/\s+/g, ' ').trim(), sec: Math.round(tot || 0) });
+  return {
+    ok: true, path, her: !!full.her, title: info.title, bvid,
+    label: String(info.title).slice(0, 16), sec: dur, start: 0,
+    size: statSync(path).size, cached: !!full.cached,
+  };
+}
+
+function fmtSec(s) {
+  const n = Number(s) || 0
+  return n ? `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}` : ''
 }
 
 export async function makeVoice(query, { pick: forced = null } = {}) {

@@ -20,7 +20,8 @@ import * as members from './members.mjs';
 import { record, maybeSummarize } from './context.mjs';
 import { generate } from './generate.mjs';
 import { learn, lookup, download, imageCQ, pickSticker, sendPicture } from './media.mjs';
-import { makeVoice, makeVoiceFull, previewSong, recordCQ, judgeSong, safeErr } from './voice.mjs';
+import { makeVoice, makeVoiceByRef, makeVoiceFull, previewSong, recordCQ, judgeSong, safeErr } from './voice.mjs';
+import { looksLikeVideoOrder } from './videoref.mjs';
 import { styleBias } from './style.mjs';
 import { hotwords, gather } from './search.mjs';
 import * as commands from './commands.mjs';
@@ -315,6 +316,38 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
   // ── 点歌（谁都能点，确定性路径，不经过模型）──
   // addressed = 这条是不是冲着小鲸鱼说的；"光秃秃一个放"必须被叫到才算点歌
   const addressed = atMe || /小鲸鱼/.test(text) || commands.isOwner(uin, policy);
+
+  // ── 直接给了链接/BV 号：不用搜、不用打分，就要这一条 ──
+  // 2026-11-06 主人：「一首歌在 B 站有很多版本，大部分不是我想要的，
+  //                    能不能我发链接或者 BV 号，你去找对应的视频」
+  const vref = looksLikeVideoOrder(text);
+  if (vref) {
+    console.log(`  [group] 指定视频：${vref.bvid || vref.avid || vref.short}`);
+    const one = vref.short
+      ? { ok: false, reason: '短链要联网跳一次，暂时只认 bilibili.com 完整链接或 BV/av 号' }
+      : await makeVoiceByRef(vref);
+    if (one.ok) {
+      const quote = evt?.message_id ? `[CQ:reply,id=${evt.message_id}]` : '';
+      if (policy.dryRun !== false) console.log(`  [dry-run] 会发语音: ${one.title}（${one.sec}s）`);
+      else {
+        const rr = await callApi('send_group_msg', { group_id: Number(gid), message: quote + recordCQ(one.path) });
+        console.log(`  [group] 已发（指定视频 ${one.bvid}，${one.sec}s）`);
+        if (sendOk(rr)) store.pushSentId(gid, rr?.data?.message_id);
+      }
+      audit(gid, { gid, uin, name, videoRef: vref.bvid || vref.avid, ok: true, sec: one.sec });
+      return;
+    }
+    const why = `这个不行诶（${safeReason(one.reason)}）`;
+    if (policy.dryRun !== false) console.log(`  [dry-run] 会发: ${why}`);
+    else {
+      const q = evt?.message_id ? `[CQ:reply,id=${evt.message_id}]` : '';
+      await callApi('send_group_msg', { group_id: Number(gid), message: q + why });
+    }
+    console.log(`  [group] 已发: ${why}`);
+    audit(gid, { gid, uin, name, videoRef: vref.bvid || vref.avid, ok: false, reason: one.reason });
+    return;
+  }
+
   let songReq = commands.parseSong(text, { addressed });
   if (songReq) {
     // ① 先确认"这是不是在点歌"。规则可能把"搞错号了"认成歌名，让模型复核一次。
