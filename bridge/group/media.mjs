@@ -242,21 +242,83 @@ export function playablePath(v) {
 }
 
 /** 按描述挑一张库里的图（简单关键词匹配） */
-export function pickSticker(query = '') {
+// 情绪 → 名字/标签候选词。她说「发个害羞的」时按这张表找图，
+// 词序就是优先级（越靠前越贴切）。表里没有的词会退回名字/描述模糊匹配。
+const MOOD_MAP = {
+  开心: ['庆祝', '点赞', '加油', '音乐', '唱歌', '跳舞', '荧光棒', '礼物', '红包', '比耶大笑', '举玫瑰'],
+  高兴: ['庆祝', '点赞', '比耶大笑', '偷笑', '音乐', '跳舞'],
+  害羞: ['害羞', '摸头害羞', '红心情书', '玫瑰示爱', '抱膝坐', '被按头'],
+  无语: ['静音', '思考', '茫然', '噢鲸', '流汗紧张', '被拦截', '程序停止', '呆滞驾驶'],
+  生气: ['冒青筋', '烧', '不耐烦', '扩音器大喊', '凶狠', '枪毙', '举枪威胁', '电锯企鹅'],
+  难过: ['哭', '委屈', '扒垃圾桶', '低落', '顶铁盆', '发呆可怜'],
+  晚安: ['睡觉', '晚安', '晚安治愈', '工作(小睡)', '趴着哈气', '被子'],
+  期待: ['期待', '捧蛋糕', '吃药', '置き', '加载'],
+  疑惑: ['满头问号', '困惑', '你是变态吗', '质疑', '质疑'],
+  得意: ['看戏', '退下', '龙颜大悦', '不屑', '小丑', '拿鞭子', '憋笑', '坏笑'],
+  害怕: ['害怕', '惊恐', '橘猫惊恐', '震惊', '可怜巴巴', '紧张'],
+  累: ['工作(疲倦)', '坐牢', '带薪拉屎', '死亡', '崩溃', '头晕', '躺'],
+  吃: ['吃(爆米花)', '吃(西瓜)', '馋', '舔', '喝', '干杯', '茶', '干饭', '蹭饭'],
+  加油: ['加油', '点赞', '庆祝', '荧光棒'],
+  打招呼: ['打招呼', '碰鼻子', '招手', '比耶'],
+  思考: ['思考', '书呆子', '画板', '主意', '打字'],
+  可爱: ['卖萌', '眨眼卖萌', '摇铃卖萌', '连续点头', '抱吉他', '仓鼠乐', '摇摆'],
+};
+
+/** 把「发个开心的」里的情绪词抽出来 */
+function moodWords(q) {
+  const out = [];
+  for (const [mood, words] of Object.entries(MOOD_MAP)) {
+    if (q.includes(mood)) out.push(...words);
+  }
+  return out;
+}
+
+export function pickSticker(query = '', opts = {}) {
   const idx = loadIndex();
-  const list = Object.entries(idx);
+  const list = Object.entries(idx).filter(([, v]) => v && v.file);
   if (!list.length) return null;
   const q = String(query ?? '').trim();
-
-  // 匹配优先级：标签精确 → 标签包含 → 描述包含 → 逐字 → 随机
-  // tags 是数组（之前只查 v.tag 字符串，手工标上去的标签一律读不到）
   const tagsOf = (v) => (Array.isArray(v.tags) ? v.tags : (v.tag ? [v.tag] : []));
-  let hit = q ? list.find(([, v]) => tagsOf(v).includes(q)) : null;
+  const nameOf = (v) => String(v.name ?? '');
+
+  // 匹配优先级：
+  //   0 情绪表（「开心」→ 庆祝/点赞/…）逐词全库找
+  //   1 名字精确 → 2 名字包含（双向）
+  //   3 标签精确 → 4 标签包含
+  //   5 描述包含 → 6 名字逐字 → 7 描述逐字
+  //   8 兜底随机
+  let hit = null;
+
+  if (q) {
+    for (const w of moodWords(q)) {
+      hit = list.find(([, v]) => nameOf(v) === w) || list.find(([, v]) => nameOf(v).includes(w));
+      if (hit) break;
+    }
+  }
+  if (!hit && q) hit = list.find(([, v]) => nameOf(v) === q);
+  if (!hit && q) hit = list.find(([, v]) => nameOf(v).includes(q) || (q.length >= 2 && q.includes(nameOf(v)) && nameOf(v).length >= 2));
+  if (!hit && q) hit = list.find(([, v]) => tagsOf(v).includes(q));
   if (!hit && q) hit = list.find(([, v]) => tagsOf(v).some((t) => String(t).includes(q)));
   if (!hit && q) hit = list.find(([, v]) => (v.desc ?? '').includes(q));
+  if (!hit && q) hit = list.find(([, v]) => q.split('').some((c) => nameOf(v).includes(c)));
   if (!hit && q) hit = list.find(([, v]) => q.split('').some((c) => (v.desc ?? '').includes(c)));
-  if (!hit) hit = list[Math.floor(Math.random() * list.length)];
+
+  // exclude 里是刚发过的 md5，避免同一张连发两次
+  const ban = new Set((opts.exclude ?? []).map(String));
+  if (hit && ban.has(hit[0])) hit = null;
+  if (!hit) {
+    const pool = list.filter(([k]) => !ban.has(k));
+    const pick = pool.length ? pool : list;
+    hit = pick[Math.floor(Math.random() * pick.length)];
+  }
 
   const v = hit[1];
-  return { path: playablePath(v), desc: v.desc, tag: tagsOf(v)[0] ?? '', file: v.file };
+  return {
+    path: playablePath(v),
+    desc: v.desc,
+    name: nameOf(v),
+    tag: tagsOf(v)[0] ?? '',
+    file: v.file,
+    key: hit[0],
+  };
 }
