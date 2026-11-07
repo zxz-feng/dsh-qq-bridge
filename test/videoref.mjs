@@ -31,6 +31,17 @@ const vs = bvVariants('bv1yf9sbtehp')
 ok(vs.length === 2 && vs.every((x) => x.slice(2) === '1yf9sbtehp'), '只把前缀归一，后 10 位原样（不同大小写是不同的视频）')
 ok(bvVariants('乱码').length === 1, '不是 BV 就原样')
 
+// 短链：光发 / 混在句子里都算指令，夸它不算
+ok(looksLikeVideoOrder('https://b23.tv/gcEwHaL') !== null, '光发短链')
+ok(looksLikeVideoOrder('唱https://b23.tv/gcEwHaL里面的歌') !== null, '唱+短链+从句')
+ok(looksLikeVideoOrder('https://b23.tv/gcEwHaL 好听') === null, '短链+夸好听 → 不算')
+
+// 带链接/BV 的消息不能再走歌名判定（否则 judgeSong 会说"不是歌"）
+const isRefMsg = (t) => /https?:\/\/|\bBV[0-9A-Za-z]{10}\b|\bav\d{3,}/i.test(t)
+ok(isRefMsg('BV1hXbN6VEKV'), 'BV 消息要跳过歌名判定')
+ok(isRefMsg('唱https://b23.tv/gcEwHaL里面的歌'), '短链消息要跳过歌名判定')
+ok(!isRefMsg('唱首雨爱'), '普通歌名不跳过')
+
 console.log(`\n视频引用：${pass} 通过 / ${fails.length} 失败`)
 for (const f of fails) console.log(`  ✗ ${f}`)
 process.exit(fails.length ? 1 : 0)

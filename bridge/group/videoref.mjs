@@ -38,6 +38,27 @@ export function parseVideoRef(text) {
   return null
 }
 
+/**
+ * b23.tv 短链要跳一次才知道是哪个视频。
+ * 不用任何库：Node 自带 fetch，跟着 3xx 走，最终 URL 里就有 /video/BVxxxx。
+ * 完全失败就返回空——调用方当「认不出」处理，不要瞎猜。
+ */
+export async function resolveShort(shortUrl, { timeoutMs = 9000 } = {}) {
+  const url = String(shortUrl || '').trim()
+  if (!url) return null
+  try {
+    const ac = new AbortController()
+    const t = setTimeout(() => ac.abort(), timeoutMs)
+    const r = await fetch(url, { redirect: 'follow', signal: ac.signal, headers: { 'user-agent': 'Mozilla/5.0' } })
+    clearTimeout(t)
+    const m = String(r.url || '').match(/BV[0-9A-Za-z]{10}/)
+    if (m) return { bvid: m[0], page: Number((String(r.url).match(/[?&]p=(\d{1,3})/) || [])[1] || 0) || 0, via: 'b23' }
+    const bv = normBvid(await r.text().catch(() => ''))
+    if (bv) return { bvid: bv, page: 0, via: 'b23' }
+  } catch { /* 网络不通就认不出 */ }
+  return null
+}
+
 /** 这句话像不像「放这个」的指令（不是单纯在聊 B 站） */
 const ORDER_WORDS = /(唱|放|来|点|整|要|听|这个|这首|就它|就这个|用这个|换这个)/
 export function looksLikeVideoOrder(text) {
@@ -53,7 +74,7 @@ const JUST_TALKING = /(好听|难听|好听吗|看过|在看在听|哪个|是哪
 
 function orderWordsLoose(text) {
   const t = String(text ?? '')
-  // 只剩链接、没有别的字 → 直接当指令
+  // 只剩链接（含 b23 短链）、没有别的字 → 直接当指令
   const rest = t.replace(B23_RE, ' ').replace(/https?:\/\/\S+/g, ' ').replace(BV_RE, ' ').replace(/av\d+/gi, ' ')
     .replace(/[《》""''：:，,。！？\s]/g, '')
   if (!rest) return true

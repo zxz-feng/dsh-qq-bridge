@@ -21,7 +21,7 @@ import { record, maybeSummarize } from './context.mjs';
 import { generate } from './generate.mjs';
 import { learn, lookup, download, imageCQ, pickSticker, sendPicture } from './media.mjs';
 import { makeVoice, makeVoiceByRef, makeVoiceFull, previewSong, recordCQ, judgeSong, safeErr } from './voice.mjs';
-import { looksLikeVideoOrder } from './videoref.mjs';
+import { looksLikeVideoOrder, resolveShort } from './videoref.mjs';
 import { styleBias } from './style.mjs';
 import { hotwords, gather } from './search.mjs';
 import * as commands from './commands.mjs';
@@ -323,18 +323,30 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
   const vref = looksLikeVideoOrder(text);
   if (vref) {
     console.log(`  [group] 指定视频：${vref.bvid || vref.avid || vref.short}`);
-    const one = vref.short
-      ? { ok: false, reason: '短链要联网跳一次，暂时只认 bilibili.com 完整链接或 BV/av 号' }
-      : await makeVoiceByRef(vref);
+    // 短链（b23.tv）先跳一次拿真 BV 号；跳不开就老实说认不出，别瞎猜一个
+    let ref2 = vref;
+    if (vref.short) {
+      const real = await resolveShort(vref.short);
+      if (!real) {
+        console.log('  [group] 短链解不开');
+        const q = evt?.message_id ? `[CQ:reply,id=${evt.message_id}]` : '';
+        if (policy.dryRun !== false) console.log('  [dry-run] 会发: 这个短链我打不开诶');
+        else await callApi('send_group_msg', { group_id: Number(gid), message: q + '这个短链我打不开诶，发完整的 bilibili.com 链接或者 BV 号行吗' });
+        return;
+      }
+      ref2 = real;
+      console.log(`  [group] 短链 → ${real.bvid}`);
+    }
+    const one = await makeVoiceByRef(ref2);
     if (one.ok) {
-      const quote = evt?.message_id ? `[CQ:reply,id=${evt.message_id}]` : '';
       if (policy.dryRun !== false) console.log(`  [dry-run] 会发语音: ${one.title}（${one.sec}s）`);
       else {
-        const rr = await callApi('send_group_msg', { group_id: Number(gid), message: quote + recordCQ(one.path) });
+        // ⚠️ 语音不带 [CQ:reply]：QQ 把「引用 + 语音」渲染成一个空气泡（用户看到引用了一块空白）
+        const rr = await callApi('send_group_msg', { group_id: Number(gid), message: recordCQ(one.path) });
         console.log(`  [group] 已发（指定视频 ${one.bvid}，${one.sec}s）`);
         if (sendOk(rr)) store.pushSentId(gid, rr?.data?.message_id);
       }
-      audit(gid, { gid, uin, name, videoRef: vref.bvid || vref.avid, ok: true, sec: one.sec });
+      audit(gid, { gid, uin, name, videoRef: ref2.bvid || ref2.avid, ok: true, sec: one.sec });
       return;
     }
     const why = `这个不行诶（${safeReason(one.reason)}）`;
@@ -344,11 +356,14 @@ export async function handleGroupMessage(evt, { callApi, isPrivate = false }) {
       await callApi('send_group_msg', { group_id: Number(gid), message: q + why });
     }
     console.log(`  [group] 已发: ${why}`);
-    audit(gid, { gid, uin, name, videoRef: vref.bvid || vref.avid, ok: false, reason: one.reason });
+    audit(gid, { gid, uin, name, videoRef: ref2.bvid || ref2.avid, ok: false, reason: one.reason });
     return;
   }
 
   let songReq = commands.parseSong(text, { addressed });
+  // 带链接或 BV/av 号的消息不走歌名判定：judgeSong 只懂自然语言歌名，
+  // 拿 "BV1hXbN6VEKV" 去问它会得到"不是歌"，然后她就回一句「搜不到」（2026-11-07 实测）。
+  if (songReq && /https?:\/\/|\bBV[0-9A-Za-z]{10}\b|\bav\d{3,}/i.test(text)) songReq = null;
   if (songReq) {
     // ① 先确认"这是不是在点歌"。规则可能把"搞错号了"认成歌名，让模型复核一次。
     const v = await judgeSong(text);
