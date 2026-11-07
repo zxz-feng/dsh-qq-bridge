@@ -70,6 +70,9 @@ function cachePath(bvid) { return `${VOICE_DIR}/${bvid}_${SEG_SEC}s.mp3`; }
  * 换声参数：模型名 / protect / index_rate 也从 settings.json 现读（同 singUrl 的理由）。
  * 2026-10-31 主人 A/B 后定：anjie2 + protect 0.55 + index 0.50 咬字最清楚。
  */
+/** 没有 opts.json 时落回的定参（2026-10-31 A/B 定稿的一套） */
+const DEFAULT_OPTS = { protect: 0.55, indexRate: 0.5 };
+
 function singOpts(override = null) {
   // feiyu 是「肥鱼大小姐」RVC v2（manifest 定的 index 0.3 / protect 0.33 / rmvpe）。
   // 2026-11-07 接进来当默认：她自己的声音唱自己的歌。
@@ -90,10 +93,12 @@ function singOpts(override = null) {
     const m = String(override).trim();
     if (m) {
       o.model = m;
+      // 定参文件在 modelDir() 里（media/voice/<model>/opts.json）。
+      // 原来这里拼的是 $DSH_HOME/voice/<model>/opts.json —— 那个目录根本不存在，
+      // 所以「唱首雨爱用amiya的嗓子」一直静默沿用全局参数。
       try {
-        const base = process.env.DSH_HOME || '/root/.dsh';
-        const p2 = `${base}/voice/${m.replace(/[^A-Za-z0-9_-]/g, '')}/opts.json`;
-        const b = JSON.parse(readFileSync(p2, 'utf8'));
+        const SAFE = m.replace(/[^A-Za-z0-9_-]/g, '');
+        const b = JSON.parse(readFileSync(`${HOST_MEDIA}/voice/${SAFE}/opts.json`, 'utf8'));
         if (Number.isFinite(Number(b.protect))) o.protect = Number(b.protect);
         if (Number.isFinite(Number(b.indexRate))) o.index = Number(b.indexRate);
       } catch { /* 没定参就沿用全局的 */ }
@@ -324,15 +329,38 @@ export async function setModel(name) {
   try {
     const cfg = existsSync(f) ? (JSON.parse(readFileSync(f, 'utf8')) || {}) : {};
     cfg.rvcModel = hit;
-    // 换模型顺手带上该模型自己的定参（存在 modelDir 旁边的 opts.json 里），
-    // 没有就不动 —— 宁可沿用旧的，也别把别的模型的参数硬套上去
-    try {
-      const o = JSON.parse(readFileSync(`${modelDir(hit)}/opts.json`, 'utf8'));
-      if (Number.isFinite(Number(o.protect))) cfg.rvcProtect = Number(o.protect);
-      if (Number.isFinite(Number(o.indexRate))) cfg.rvcIndexRate = Number(o.indexRate);
-    } catch { /* 没有定参文件 */ }
+    // 换模型必须换整套定参（存在 modelDir 旁边的 opts.json 里）。
+    // ⚠️ 2026-11-08 主人报的 bug：他在设置页把模型从 feiyu 切回 amiya，
+    // 但 settings.json 里已经有 rvcProtect/rvcIndexRate（feiyu 的 0.33/0.3），
+    // 于是 amiya 一直拿 feiyu 的参数在跑，唱出来不是 10-31 定的那个味。
+    // 现在无条件覆盖：有 opts.json 就用它的，没有才落回默认。
+    // 定参文件在「媒体目录」下：$MEDIA_DIR/voice/<模型>/opts.json。
+    // ⚠️ 不能用 modelDir()，那个函数会用 singOpts().model 去补默认值；
+    // 此刻 settings 里还是旧模型，写进 settings 之后才对，所以这里自己拼。
+    const SAFE = String(hit).replace(/[^A-Za-z0-9_-]/g, '');
+    const candidates = [
+      `${HOST_MEDIA}/voice/${SAFE}/opts.json`,
+      `${process.env.DSH_HOME || '/root/.dsh'}/voice/${SAFE}/opts.json`,
+    ];
+    let applied = null;
+    for (const f2 of candidates) {
+      if (!existsSync(f2)) continue;
+      try {
+        const o = JSON.parse(readFileSync(f2, 'utf8'));
+        if (Number.isFinite(Number(o.protect))) cfg.rvcProtect = Number(o.protect);
+        if (Number.isFinite(Number(o.indexRate))) cfg.rvcIndexRate = Number(o.indexRate);
+        applied = { protect: cfg.rvcProtect, indexRate: cfg.rvcIndexRate, from: f2 };
+        break;
+      } catch { /* 坏文件就试下一个 */ }
+    }
+    if (!applied) {
+      // 没有定参文件：落回全局默认，别把上一个模型的参数带过来
+      cfg.rvcProtect = DEFAULT_OPTS.protect;
+      cfg.rvcIndexRate = DEFAULT_OPTS.indexRate;
+      applied = { ...DEFAULT_OPTS, fallback: true };
+    }
     writeFileSync(f, JSON.stringify(cfg, null, 2));
-    return { ok: true, model: hit };
+    return { ok: true, model: hit, opts: applied };
   } catch (e) {
     return { ok: false, reason: `写不进设置：${String(e?.message ?? e).slice(0, 60)}` };
   }
@@ -694,7 +722,12 @@ export async function makeVoiceByRef(ref) {
   if (tot > 0 && tot < dur) dur = Math.max(10, tot - 1);
 
   let path;
-  try { path = await cutForSend(bvid, 0, dur, modelOverride); }
+  // ⚠️ 2026-11-08：这里原来写的是 `cutForSend(bvid, 0, dur, modelOverride)`，
+  // 但 makeVoiceByRef 根本没有 modelOverride 这个参数（它只接 ref）——
+  // 于是「主人发 B 站链接指定视频」这条路必定 ReferenceError: modelOverride is not defined，
+  // 换声都做完了才在切段这一步炸掉。整首换声已经在 ensureHerFull 里按当前模型做完，
+  // 切段沿用同一份 settings 即可，不需要再传 override。
+  try { path = await cutForSend(bvid, 0, dur); }
   catch (e) { return { ok: false, reason: '切段失败: ' + e.message }; }
   if (statSync(path).size < 2000) return { ok: false, reason: '切出来的文件太小，可能没声音' };
 
@@ -737,6 +770,7 @@ export async function makeVoice(query, { pick: forced = null, model: modelOverri
   if (total > 0 && total < dur) dur = Math.max(10, total - 1);
 
   let path;
+  // makeVoice 有 modelOverride（单曲指定嗓子），必须传下去，否则单曲指定只影响换声不影响切段
   try { path = await cutForSend(bvid, 0, dur, modelOverride); }
   catch (e) { return { ok: false, reason: '切段失败: ' + e.message }; }
 
