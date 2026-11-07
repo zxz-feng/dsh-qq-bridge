@@ -382,6 +382,15 @@ console.log('\n【人设（QQ 群版）】')
 ok('换声缓存按歌存、不带段长', herFullPath('BV1sZywBxEHd').endsWith('_herfull.mp3'))
 ok('改段长不换文件名（GPU 只跑一次）', !herFullPath('BV1sZywBxEHd').includes('3600'))
 
+// 换声缓存必须按模型分开（2026-11-07 主人：别让 feiyu 的点播命中 amiya 的音频）
+{
+  const a = herFullPath('BV1sZywBxEHd', 'amiya')
+  const f = herFullPath('BV1sZywBxEHd', 'feiyu')
+  ok('不同模型 → 不同文件', a !== f)
+  ok('路径里带模型名', a.includes('/amiya/') && f.includes('/feiyu/'))
+  ok('同模型 → 同一文件（还是复用）', herFullPath('BV1sZywBxEHd', 'feiyu') === f)
+}
+
 // 「连着被无视就闭嘴」必须有两个出口（2026-11-04 主群哑火的真因）
 {
   const base = { replyProb: 1, coldProb: 1, dailyActive: 100, dailyTotal: 1000, cooldownSec: 0, minScore: 0, quietHours: [] }

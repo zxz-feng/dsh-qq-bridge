@@ -227,10 +227,24 @@ async function singRemote(file, bvid) {
 // 段长怎么改、点几次，GPU 都只跑一次。
 const HER_CHUNK_SEC = Number(process.env.HER_CHUNK_SEC ?? 150);   // 单次送换声的块长
 
-/** 整首换声结果的落盘位置（不含段长） */
-export function herFullPath(bvid) { return `${VOICE_DIR}/${bvid}_herfull.mp3`; }
+// 换声结果按**模型**分开存：同一个 bvid 用 feiyu 换过、又用 amiya 换过，
+// 是两条不同的音频。混在一起就会出现"点雨爱，唱出来是另一个嗓子"。
+// 目录名就是模型名，切模型等于换目录，互不干扰。
+function modelDir(model) {
+  const m = String(model || singOpts().model || 'default').trim() || 'default';
+  const dir = `${VOICE_DIR}/${m}`;
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
-function herPartPath(bvid, i) { return `${VOICE_DIR}/${bvid}_herpart_${i}.mp3`; }
+/** 整首换声结果的落盘位置（按模型 + 不含段长） */
+export function herFullPath(bvid, model) {
+  return `${modelDir(model)}/${bvid}_herfull.mp3`;
+}
+
+function herPartPath(bvid, i, model) {
+  return `${modelDir(model)}/${bvid}_herpart_${i}.mp3`;
+}
 
 // ── 换声曲库索引 ────────────────────────────────────────
 // 缓存文件名是 bvid，人看不懂；TG 那边要「随便来一首缓存里的歌」，
@@ -321,8 +335,9 @@ export function findCached(query) {
 export function cachedSongs() {
   const idx = readSongIndex();
   const out = [];
+  const cur = singOpts().model;
   for (const [bvid, v] of Object.entries(idx)) {
-    const p = herFullPath(bvid);
+    const p = herFullPath(bvid, cur);
     try {
       if (statSync(p).size > 100 * 1024) {
         out.push({ bvid, title: String(v.title || bvid), sec: Number(v.sec || 0), at: Number(v.at || 0) });
@@ -349,9 +364,10 @@ async function concatAudio(list, out) {
  * @returns {Promise<{path:string, her:boolean, total:number, cached:boolean}>}
  */
 export async function ensureHerFull(bvid) {
-  const out = herFullPath(bvid);
+  const model = singOpts().model;
+  const out = herFullPath(bvid, model);
   if (existsSync(out) && statSync(out).size > 100 * 1024) {
-    console.log(`  [voice] 缓存命中（整首换声）${Math.round(statSync(out).size / 1024)}KB`);
+    console.log(`  [voice] 缓存命中（整首换声 · ${model}）${Math.round(statSync(out).size / 1024)}KB`);
     const total = await probeDuration(out);
     rememberSong(bvid, { sec: Math.round(total || 0) });
     return { path: out, her: true, total, cached: true };
@@ -364,7 +380,7 @@ export async function ensureHerFull(bvid) {
   const parts = [];
   let converted = 0;
   for (let i = 0; i < n; i += 1) {
-    const seg = herPartPath(bvid, i);
+    const seg = herPartPath(bvid, i, model);
     const dur = Math.min(HER_CHUNK_SEC, total - i * HER_CHUNK_SEC);
     if (!existsSync(seg) || statSync(seg).size < 2000) await cutSegment(src, seg, i * HER_CHUNK_SEC, dur);
     const her = await singRemoteTo(seg, seg.replace(/\.mp3$/, '_her.mp3'));
@@ -374,15 +390,16 @@ export async function ensureHerFull(bvid) {
   }
   if (parts.length === 1) copyFileSync(parts[0], out);
   else await concatAudio(parts, out);
-  console.log(`  [voice] 整首换声完成 ${Math.round(statSync(out).size / 1024)}KB`
+  console.log(`  [voice] 整首换声完成 ${Math.round(statSync(out).size / 1024)}KB（模型 ${model}）`
     + `（${n} 块，${converted} 块是她的嗓子）`);
   return { path: out, her: converted > 0, total, cached: false };
 }
 
 /** 从整首换声结果里切第 index 段（便宜，不碰 GPU） */
 export async function cutForSend(bvid, index, sec) {
-  const src = herFullPath(bvid);
-  const dst = `${VOICE_DIR}/${bvid}_send_${sec}s_${index}.mp3`;
+  const model = singOpts().model;
+  const src = herFullPath(bvid, model);
+  const dst = `${modelDir(model)}/${bvid}_send_${sec}s_${index}.mp3`;
   if (existsSync(dst) && statSync(dst).size > 2000) return dst;
   await cutSegment(src, dst, index * sec, sec);
   return dst;
