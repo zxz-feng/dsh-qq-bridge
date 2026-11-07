@@ -71,7 +71,9 @@ function cachePath(bvid) { return `${VOICE_DIR}/${bvid}_${SEG_SEC}s.mp3`; }
  * 2026-10-31 主人 A/B 后定：anjie2 + protect 0.55 + index 0.50 咬字最清楚。
  */
 function singOpts() {
-  const o = { model: 'anjie2', protect: 0.55, index: 0.5 };
+  // feiyu 是「肥鱼大小姐」RVC v2（manifest 定的 index 0.3 / protect 0.33 / rmvpe）。
+  // 2026-11-07 接进来当默认：她自己的声音唱自己的歌。
+  const o = { model: 'feiyu', protect: 0.33, index: 0.3 };
   try {
     const base = process.env.DSH_HOME || '/root/.dsh';
     const f = `${base}/voice/settings.json`;
