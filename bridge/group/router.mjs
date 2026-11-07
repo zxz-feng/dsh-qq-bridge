@@ -20,7 +20,7 @@ import * as members from './members.mjs';
 import { record, maybeSummarize } from './context.mjs';
 import { generate } from './generate.mjs';
 import { learn, lookup, download, imageCQ, pickSticker, sendPicture } from './media.mjs';
-import { makeVoice, makeVoiceByRef, makeVoiceFull, previewSong, recordCQ, judgeSong, safeErr } from './voice.mjs';
+import { makeVoice, makeVoiceByRef, makeVoiceFull, previewSong, recordCQ, judgeSong, safeErr, findCached } from './voice.mjs';
 import { looksLikeVideoOrder, resolveShort } from './videoref.mjs';
 import { styleBias } from './style.mjs';
 import { hotwords, gather } from './search.mjs';
@@ -1067,8 +1067,21 @@ async function runSingleSong({ query, raw = '', quiet = false, pick = null }, { 
   const cap = Number(policy.voicePerDay ?? 999);
   if (cap > 0 && used >= cap) { await send('今天放太多啦，明天再放'); return true; }
 
+  // ① 先查曲库（纯本地，毫秒级）。点过的歌不该再走「问模型 + 搜 B 站 + 打分」那三秒。
+  //    命中就直接唱；没点名要歌名确认的（quiet / 主人已确认过）也直接唱。
+  let cachedHit = false;
+  if (!pick) {
+    const hit = findCached(query);
+    if (hit) {
+      cachedHit = true;
+      console.log(`  [group] 曲库命中 ${hit.bvid}「${String(hit.title).slice(0, 24)}」→ 跳过选片`);
+      pick = { bvid: hit.bvid, title: hit.title, duration: '' };
+    }
+  }
+
   // 先报歌名，主人点头才唱（主人 2026-10-31 要求：「唱之前把搜到的音频名字告诉我」）
-  if (!pick && policy.confirmBeforeSing !== false) {
+  // 但曲库命中的是**主人自己点过、听过的那一条**，不用再问一遍「唱这个？」。
+  if (!pick && policy.confirmBeforeSing !== false && !cachedHit) {
     const pre = await previewSong(query);
     if (!pre.ok) {
       await send(`没扒到这首歌诶（${safeReason(pre.reason)}）`);

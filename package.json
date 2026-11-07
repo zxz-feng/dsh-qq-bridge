@@ -55,7 +55,7 @@
   },
   "scripts": {
     "verify": "node scripts/verify.mjs",
-    "test": "node test/run.mjs && node test/api.mjs && node test/client.mjs && node test/tools.mjs && node test/private.mjs && node test/agent.mjs && node test/memory.mjs && node test/window.mjs && node test/catchup.mjs && node test/videoref.mjs",
+    "test": "node test/run.mjs && node test/api.mjs && node test/client.mjs && node test/tools.mjs && node test/private.mjs && node test/agent.mjs && node test/memory.mjs && node test/window.mjs && node test/catchup.mjs && node test/videoref.mjs && MEDIA_DIR=${MEDIA_DIR:-/root/工位/qq-bridge/napcat-data/media} node test/songcache.mjs",
     "sim": "node test/sim-group.mjs",
     "test:tools": "node test/tools.mjs"
   },

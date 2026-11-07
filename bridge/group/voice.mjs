@@ -247,6 +247,74 @@ export function rememberSong(bvid, info = {}) {
   } catch { /* 索引写不进去不影响唱歌 */ }
 }
 
+// ── 先查曲库，再去搜（2026-11-07 主人要求）──────────────────────────
+//
+// 原来点歌是「问模型是不是歌 → 搜 B 站 → 打分 → 才发现缓存里有」，
+// 明明 3 秒能出的东西，光选片就花掉 3 秒。现在顺序倒过来：
+// 先按歌名在换声曲库里找，命中就直接发，不联网、不问模型。
+//
+// 但「命中」必须精确：主人点《雨爱》不能给他《雨爱（司凤版）》，
+// 点《雨爱（司凤版）》也不能给原版；点了「XX版」而库里没有，就得去搜。
+const VER_WORDS = /(女版|女生版|女声版|女声|男版|男生版|男声版|完整版|整首|全曲|live|现场|翻唱|版)/gi;
+
+/** 把标题洗成能比较的样子：去装饰、去书名号、去版本词、去标点空格 */
+function normalizeTitle(t) {
+  return String(t ?? '')
+    .replace(/[《》「」【】\[\]（）()""''“”]/g, ' ')
+    .replace(VER_WORDS, ' ')
+    .replace(/[｜|·・\-—–_/\\,，。.、:：;；!！?？~～"' ]+/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+/** 这条缓存记录的标题里有没有「版本词」，是哪个 */
+function versionOf(title) {
+  const t = String(title ?? '');
+  const named = (t.replace(/完整版|整首|全曲/g, ' ').match(/([\u4e00-\u9fa5A-Za-z]{1,6})版/) || [])[1] || '';
+  const v = named.replace(/^[的个了和与\s]+/, '');
+  if (v && !/^(女|男|女声|男声|女生|男生)$/.test(v)) return v;
+  if (/女版|女生版|女声版|女声/.test(t)) return '女声';
+  if (/男版|男生版|男声版/.test(t)) return '男声';
+  return '';
+}
+
+/**
+ * 在换声曲库里找这首歌。
+ * @param {string} query 用户点的（可能带「司凤版」这类版本词）
+ * @returns {object|null} 命中返回 cachedSongs() 那种记录，否则 null
+ */
+export function findCached(query) {
+  const { kw, version, flavor } = splitVersion(query);
+  const want = normalizeTitle(kw);
+  if (!want || want.length < 2) return null;   // 「酒」「歌」这种一个字的不猜
+  const wantVer = String(version || flavor || '').replace(/版$/, '');
+  const wantLive = /live|现场|翻唱/i.test(String(query || ''));
+
+  const hits = cachedSongs().filter((s) => {
+    const title = normalizeTitle(s.title);
+    // 标题里得真包含这个歌名（宁可短一点，也别把《雨爱》匹配到《雨爱(司凤版)》上）
+    return title.includes(want);
+  });
+  if (!hits.length) return null;
+
+  // ② 「live/现场/翻唱」也是版本要求，库里没有就让她去搜
+  if (wantLive && !hits.some((s) => /live|现场|翻唱/i.test(String(s.title)))) return null;
+
+  // ① 要了某个版本：只认带那个版本词的；库里没有就返回 null，让上层去搜
+  if (wantVer) {
+    const exact = hits.find((s) => {
+      const v = versionOf(s.title);
+      const norm = normalizeTitle(s.title);
+      return norm.includes(normalizeTitle(wantVer)) || v === wantVer;
+    });
+    return exact || null;
+  }
+
+  // ② 没要版本：优先「标题里没有版本词」的那条（原版）
+  const plain = hits.find((s) => !versionOf(s.title));
+  return plain || null;   // 只有版本货、没有原版 → 也返回 null，让它去搜原版
+}
+
 /** 缓存里「整首已换声」的歌，最近用过的排前面 */
 export function cachedSongs() {
   const idx = readSongIndex();
