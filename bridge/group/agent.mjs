@@ -119,12 +119,22 @@ export function toOutput(obj) {
   if (!obj) return out
   // 不设字数上限（2026-11-04 主人要求）：模型用 \n 分段，一段发一条，
   // 最多 4 条 —— 再多就不是聊天，是刷屏了。
-  const reply = String(obj.reply ?? '').replace(/\r/g, '').trim()
+  let reply = String(obj.reply ?? '').replace(/\r/g, '').trim()
   if (obj.silence === true || !reply) { out.passed = true; return out }
+  // 人设教她写 `[[sticker:害羞]]`（老 generate 路径的语法），但 agent 只认 JSON 字段。
+  // 2026-11-07 主人指出「从来没见小鲸鱼用过表情包」—— 根因就是这两套语法不互通。
+  // 这里把标记从正文里剥掉，同时兼作 sticker 字段。
+  const markerStickers = []
+  reply = reply.replace(/\[\[\s*sticker\s*[:：]\s*([^\]]{1,20})\]\]/gi, (_, v) => {
+    const w = String(v).trim()
+    if (w) markerStickers.push(w)
+    return ' '
+  }).replace(/[ \t]{2,}/g, ' ').trim()
+  if (!reply && !markerStickers.length && !obj.sticker) { out.passed = true; return out }
   // 两条路的分隔符都要认：人设里教的是 `|||`（老约定），新 prompt 里教的是换行。
   // 2026-11-05 群里看到 `骂谁呀，我又没招你|||再说就咬你` 就是只认 \n 造成的。
   const chunks = reply.split(/\|\|\||\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 4)
-  out.parts = chunks.length ? chunks : [reply]
+  out.parts = chunks.length ? chunks : (reply ? [reply] : [])
   // 语音只能是"一段话"，所以多段时合并成一句，交给 router 只发一条语音
   if (obj.voice === true) out.voices = [chunks.join('，')]
   if (obj.sing) {
@@ -132,7 +142,9 @@ export function toOutput(obj) {
     // 「首歌 / 一首歌 / 歌」这种不是歌名，是"随便唱" —— 交回 router 的随机逻辑
     if (name && !/^(一?首|一?支|个)?歌(曲)?$/.test(name)) out.sings = [name]
   }
+  // JSON 字段优先，其次是正文里剥出来的标记（可能不止一个，取第一个）
   if (obj.sticker) out.stickers = [String(obj.sticker).trim()]
+  else if (markerStickers.length) out.stickers = [markerStickers[0]]
   return out
 }
 

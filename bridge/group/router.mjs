@@ -727,8 +727,12 @@ async function respond({ gid, policy, msg, evt, callApi, isDeferred = false, har
   }
 
   // 表情包
-  if (out.stickers.length && Math.random() < 0.6) {
-    const st = pickSticker(out.stickers[0]);
+  // 她自己写的是 [[sticker:开心]] / JSON 的 sticker 字段，说明这一刻确实想发，
+  // 就别再掷骰子（0.6 的老门槛会让 40% 的心意落空）。只有没写时才按概率补一张。
+  const stickerProb = out.stickers.length ? 1 : Number(policy.stickerProb ?? 0);
+  if (Math.random() < stickerProb) {
+    const sfx = pickSticker(out.stickers[0] ?? '');
+    const st = sfx;
     if (st) {
       await sleep(500 + Math.random() * 700);
       if (dry) console.log(`  [dry-run] 会发表情包: ${st.desc}`);

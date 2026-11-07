@@ -48,6 +48,32 @@ console.log('===== 分段与语音（2026-11-05 群里看到 ||| 漏进正文）
   ok(o.agent === true, 'agent 标记要留着（router 靠它决定执不执行语音）')
 }
 
+// 表情包标记：人设教的是 [[sticker:词]]（老 generate 路径的语法），
+// 而 agent 只认 JSON 字段 —— 2026-11-07 主人指出「从来没见用过表情包」就是这个原因。
+{
+  const o = toOutput({ reply: '草 就这\n[[sticker:无语]]' })
+  ok(o.parts.length === 1 && o.parts[0] === '草 就这', '标记要从正文里剥掉')
+  ok(o.stickers[0] === '无语', '标记要变成 sticker')
+}
+{
+  const o = toOutput({ reply: '[[sticker:开心]]' })
+  ok(o.parts.length === 0, '只有标记时不该有正文')
+  ok(o.stickers[0] === '开心', '只有标记也要发出去')
+}
+{
+  const o = toOutput({ reply: '哈哈哈 ||| 真的假的 ||| [[sticker:害羞]]' })
+  ok(o.parts.length === 2, '带标记时 ||| 照样拆')
+  ok(o.stickers[0] === '害羞', '||| 和标记同时出现也要认')
+}
+{
+  const o = toOutput({ reply: '哈哈哈', sticker: '开心' })
+  ok(o.stickers[0] === '开心', 'JSON 字段优先')
+}
+{
+  const o = toOutput({ reply: '正常说话' })
+  ok(o.stickers.length === 0, '没写就不发')
+}
+
 console.log(`\n===== ${fail ? '✗' : '✓'} agent 解析 ${pass} 通过 / ${fail} 失败 =====`)
 process.exit(fail ? 1 : 0)
 
