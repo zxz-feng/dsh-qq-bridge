@@ -1136,9 +1136,11 @@ async function runSingleSong({ query, raw = '', quiet = false, pick = null }, { 
   const stks = commands.songStickersFor(policy, query);
   console.log(`  [group] 配套表情包 ${stks.length} 张`);
   for (const f of stks) {
-    const p2 = `${HOST_MEDIA}/stickers/small/${f}`;
-    const p3 = existsSync(p2) ? p2 : `${HOST_MEDIA}/stickers/${f}`;
-    if (!existsSync(p3)) { console.log(`  [group] 配套表情包不在：${f}`); continue; }
+    // 配置里存的是 md5，磁盘上是 md5.gif —— 之前漏了扩展名，两张图全被判"不在"
+    const base = String(f).endsWith('.gif') ? String(f) : `${f}.gif`;
+    const p2 = `${HOST_MEDIA}/stickers/small/${base}`;
+    const p3 = existsSync(p2) ? p2 : `${HOST_MEDIA}/stickers/${base}`;
+    if (!existsSync(p3)) { console.log(`  [group] 配套表情包不在：${base}`); continue; }
     if (dry) { console.log(`  [dry-run] 会发图: ${f}`); continue; }
     // ⚠️ 不要直接 callApi('send_group_msg')：私聊的 gid 是 "p+QQ号"，
     // 真正的翻译发生在私聊那层 callApi 包装里；这里统一走 send()，群聊私聊都对。
