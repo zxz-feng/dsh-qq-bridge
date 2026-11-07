@@ -249,12 +249,14 @@ export function pickSticker(query = '') {
   const q = String(query ?? '').trim();
 
   // 匹配优先级：标签精确 → 标签包含 → 描述包含 → 逐字 → 随机
-  let hit = q ? list.find(([, v]) => v.tag === q) : null;
-  if (!hit && q) hit = list.find(([, v]) => v.tag && v.tag.includes(q));
+  // tags 是数组（之前只查 v.tag 字符串，手工标上去的标签一律读不到）
+  const tagsOf = (v) => (Array.isArray(v.tags) ? v.tags : (v.tag ? [v.tag] : []));
+  let hit = q ? list.find(([, v]) => tagsOf(v).includes(q)) : null;
+  if (!hit && q) hit = list.find(([, v]) => tagsOf(v).some((t) => String(t).includes(q)));
   if (!hit && q) hit = list.find(([, v]) => (v.desc ?? '').includes(q));
   if (!hit && q) hit = list.find(([, v]) => q.split('').some((c) => (v.desc ?? '').includes(c)));
   if (!hit) hit = list[Math.floor(Math.random() * list.length)];
 
   const v = hit[1];
-  return { path: playablePath(v), desc: v.desc, tag: v.tag ?? '' };
+  return { path: playablePath(v), desc: v.desc, tag: tagsOf(v)[0] ?? '', file: v.file };
 }

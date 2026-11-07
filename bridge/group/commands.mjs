@@ -334,6 +334,28 @@ const CHATTER = /^(在吗|在不在|在么|你好|hi|hello|干嘛|在干啥|什�
  * @param {{addressed?:boolean}} opts 是否被叫到（@我 / 叫小鲸鱼 / 主人）
  * @returns {{query:string, full:boolean}|null}
  */
+/**
+ * 这首歌有没有「配套表情包」—— 点它的时候跟着发。
+ *
+ * 主人 2026-11-07：「我点朋友的酒，能不能顺带固定发送这两个表情包？」
+ * 配置写在 group-allowlist.json 的 groups[gid].songStickers：
+ *   { "朋友的酒": ["99ef66b57172…", "0abd8184…"] }
+ * 键是歌名（会用 normalizeTitle 归一，写「朋友的酒」或「朋友的酒DJ版」都能对上）。
+ */
+export function songStickersFor(policy, query) {
+  const map = policy?.songStickers;
+  if (!map || typeof map !== 'object') return [];
+  const want = String(query ?? '').replace(/[《》""（）()\s]/g, '').toLowerCase();
+  if (!want) return [];
+  for (const [k, v] of Object.entries(map)) {
+    const key = String(k).replace(/[《》""（）()\s]/g, '').toLowerCase();
+    if (key && (want === key || want.includes(key) || key.includes(want))) {
+      return Array.isArray(v) ? v.filter(Boolean) : [];
+    }
+  }
+  return [];
+}
+
 export function parseSong(text, { addressed = false } = {}) {
   const t = cleanSongText(text);
   if (!t) return null;

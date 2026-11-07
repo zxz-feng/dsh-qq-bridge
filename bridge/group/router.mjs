@@ -28,7 +28,7 @@ import * as commands from './commands.mjs';
 import { chat } from './llm.mjs';
 import { shortPersona, ANCHOR } from './persona.mjs';
 import { hostSpeak } from './hostsearch.mjs';
-import { stage } from './paths.mjs';
+import { stage, HOST_MEDIA } from './paths.mjs';
 import { runAgent } from './agent.mjs';
 import * as memory from './memory.mjs';
 import * as win from './window.mjs';
@@ -1128,6 +1128,20 @@ async function runSingleSong({ query, raw = '', quiet = false, pick = null }, { 
   store.setLastSong(gid, query);
   // quiet = 模型自己已经说过"给你唱"，就别再补一句"给你放 X"（免得重复）
   if (!quiet) await send(`${quote}给你放 ${v.label || cleanTitle(v.title, query)}`);
+
+  // 这首歌配的表情包（主人 2026-11-07 要求：点《朋友的酒》固定发那两张）
+  // 紧跟着语音发，不引用 —— 引用+图片在某些客户端也会显示成空泡
+  const stks = commands.songStickersFor(policy, query);
+  for (const f of stks) {
+    const p2 = `${HOST_MEDIA}/stickers/small/${f}`;
+    const p3 = existsSync(p2) ? p2 : `${HOST_MEDIA}/stickers/${f}`;
+    if (!existsSync(p3)) { console.log(`  [group] 配套表情包不在：${f}`); continue; }
+    if (dry) { console.log(`  [dry-run] 会发图: ${f}`); continue; }
+    const ri = await callApi('send_group_msg', { group_id: Number(gid), message: imageCQ(p3) });
+    const okI = sendOk(ri);
+    console.log(`  [group] 配套表情包${okI ? '已发' : '发送失败'}: ${f.slice(0, 12)}`);
+    if (okI) store.pushSentId(gid, ri?.data?.message_id);
+  }
   audit(gid, { gid, uin, song: query, ok: true, title: v.title, sec: v.sec, cached: v.cached });
   return true;
 }
