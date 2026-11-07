@@ -104,6 +104,15 @@ function singOpts(override = null) {
       } catch { /* 没定参就沿用全局的 */ }
     }
   }
+  // 最后一道兜底：不管参数是从 settings.json 还是别处来的，都要和「这首歌实际用哪个模型」对上。
+  // 2026-11-08 事故：从 feiyu 切回 amiya 时 settings 里还留着 feiyu 的 0.33/0.30，
+  // 于是「模型 amiya + 参数 feiyu」串了。这里按模型强制对齐，串不了。
+  const SAFE_M = String(o.model).replace(/[^A-Za-z0-9_-]/g, '');
+  try {
+    const own = JSON.parse(readFileSync(`${HOST_MEDIA}/voice/${SAFE_M}/opts.json`, 'utf8'));
+    if (Number.isFinite(Number(own.protect))) o.protect = Number(own.protect);
+    if (Number.isFinite(Number(own.indexRate))) o.index = Number(own.indexRate);
+  } catch { /* 这个模型没定参文件，沿用 settings 里的 */ }
   if (process.env.SING_MODEL && !override) o.model = String(process.env.SING_MODEL);
   return o;
 }
@@ -284,6 +293,8 @@ const SONG_INDEX = `${VOICE_DIR}/index.json`;
 
 /** 现在用的是哪个嗓子（同 singOpts，只是给命令层一个语义清楚的名字） */
 export function currentModel() { return singOpts().model; }
+/** 只为自检/日志：看当前实际会送出去的定参 */
+export function currentOpts(override = null) { return singOpts(override); }
 
 /** 默认嗓子：切过之后还留一手，一句话能回到它 */
 export const DEFAULT_MODEL = 'amiya';
