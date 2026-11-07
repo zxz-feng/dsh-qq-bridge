@@ -888,6 +888,20 @@ async function runCommand(cmd, { gid, uin, name, policy, callApi, at, evt, isPri
 
   if (r.action === 'voice') {
     if (!r.arg) { await send('唱什么呀，给个歌名'); return true; }
+    // 「唱首雨爱用 feiyu 的嗓子」：临时指定这一首的嗓子，不动全局设置。
+    // 全局切换走「换成 feiyu」（model 命令），两件事别混。
+    const pick = String(r.model ?? '').trim();
+    if (pick) {
+      const { listModels } = await import('./voice.mjs');
+      const ms = await listModels();
+      const hit = ms.find((m) => m.toLowerCase() === pick.toLowerCase());
+      if (!hit) {
+        await send(`没这个嗓子 ||| 有：${ms.join(' / ') || '（服务没开）'}`);
+        return true;
+      }
+      await runSingleSong({ query: r.arg, full: false, model: hit }, { gid, uin, name, policy, callApi, evt });
+      return true;
+    }
     await runSingleSong({ query: r.arg, full: false }, { gid, uin, name, policy, callApi, evt });
     return true;
   }
@@ -1056,7 +1070,9 @@ function pickDeflect() {
  * 单曲：扒一段 59 秒发出去
  * 搜不到时会用整句原文再试一次（"放生自己"这种连写的情况）
  */
-async function runSingleSong({ query, raw = '', quiet = false, pick = null }, { gid, uin, name, policy, callApi, evt }) {
+async function runSingleSong({ query, raw = '', quiet = false, pick = null, model = '' }, { gid, uin, name, policy, callApi, evt }) {
+  // model：这条消息临时指定的嗓子（「唱首雨爱用amiya的嗓子」），不写全局设置
+  const oneOff = String(model ?? '').trim();
   const dry = policy.dryRun !== false;
   const quote = evt?.message_id ? `[CQ:reply,id=${evt.message_id}]` : '';
   const send = async (body) => {
@@ -1103,7 +1119,7 @@ async function runSingleSong({ query, raw = '', quiet = false, pick = null }, { 
   }
 
   console.log(`  [group] 点歌: ${query}`);
-  let v = await makeVoice(query, pick ? { pick } : {});
+  let v = await makeVoice(query, { ...(pick ? { pick } : {}), ...(oneOff ? { model: oneOff } : {}) });
   if (!v.ok && /搜不到/.test(v.reason || '') && raw) {
     // 连写的歌名再试一次：把原句去掉"小鲸鱼/@/标点"整句当关键词
     const alt = String(raw)

@@ -72,6 +72,10 @@ export function parseCommand(text) {
   if (!t) return null;
 
   const rules = [
+    // 音色（换声模型）：查 / 切。列表向本地服务现问，不写死。
+    // 2026-11-07 主人要求：「qq里面发送固定命令查看拥有模型并能够切换」
+    { kind: 'model', re: /^(?:看看|查一下|查查|列出|有哪些|所有)?\s*(?:换声|唱歌?的?)?\s*(?:模型|嗓子|音色|声音)\s*(?:有哪些|都有啥|列表|list|有什么)?\s*[?？]?$/ },
+    { kind: 'model', re: /^(?:换成|切成|换|切|改成|设置|用)\s*(?:个)?\s*(?:模型|嗓子|音色|声音|用)?\s*([A-Za-z0-9_-]{2,20})\s*(?:吧|了|呀|啊)?\s*$/ },
     // 风格档（只有主人能调）。一个 kind 管全部：切/关/查/列。
     // 顺序：关 → 通用切换 → 开 → 裸名字，反了会把「关掉孙吧」认成「开」
     { kind: 'style', re: /^(?:关|关闭|退出|停|收|别)\s*(?:掉|了)?\s*(?:风格|人格|性格|模式|孙吧|孙笑川|嘴臭|嘴毒|抽象|傲娇|冷淡|元气)\s*$/ },
@@ -83,6 +87,8 @@ export function parseCommand(text) {
     { kind: 'find', re: /^(?:[帮给][\u4e00-\u9fa5A-Za-z0-9_]{0,10}?|替我|求|要)?(?:找|搜|搞|弄|来|推荐|整)(?:个|一个|一张|一下|一找)?\s*(.{2,30})$/ },
     // 「自己唱」「你唱」「赶紧唱」——句首的称呼/语气词会把动词顶离行首（2026-10-31
     // 主人说「自己唱完整版雨爱」，整句没进点歌流程，一个音符都没出）
+    { kind: 'model', re: /^(?:(?:唱|点)(?:歌|一首|首)?\s*用\s*([A-Za-z0-9_-]{2,20})|(?:唱|点)首?\s*.{1,20}?\s*用\s*([A-Za-z0-9_-]{2,20}))\s*(?:的)?(?:嗓子|音色|声音|模型)$/ },
+    { kind: 'model', re: /^用\s*([A-Za-z0-9_-]{2,20})\s*(?:的)?(?:嗓子|音色|声音|模型)\s*$/ },
     { kind: 'sing', re: /^(?:(?:那|那么|嗯|啊|诶|唉|哎|好|行|可以|你|您|就|快|赶紧|现在|给我|帮我|麻烦|对了|话说|自己|亲自|本人|真的|再|来)+\s*)?(唱一下|唱下|唱|来一曲|来一段|来首|来点|放首歌?|放个歌|放一首|放首|放一下|点歌|放)\s*(?:个|一首|首|一段|一下|点)?\s*(.*)$/ },
     { kind: 'sing', re: /^来一首\s*(.*)$/ },
     { kind: 'sticker', re: /^(发个?表情包?|来张表情|发表情|来个表情)\s*(.*)$/ },
@@ -97,7 +103,7 @@ export function parseCommand(text) {
     const m = t.match(re);
     if (!m) continue;
     // sing/search 的正文在 m[2]；find 只有一个捕获组，正文在 m[1]（2026-10-29 踩过）
-    const rawArg = (m[2] ?? m[1] ?? '').trim();
+    const rawArg = String(m[2] ?? m[1] ?? '').trim();
     // ⚠️ 分发表拿到的是**正则捕获的原文**，脏东西还都在：
     //    2026-10-30「唱下雨爱这首歌」→ 捕获「雨爱这首歌」→ 去搜「雨爱这首歌」→ 放出一条 vlog
     //    cleanSongText 会把「这首歌/那首歌」「《》」这些口语剥掉，sing/search 必须先过一遍
@@ -110,12 +116,15 @@ export function parseCommand(text) {
     if (kind === 'find' && !/(黄油|galgame|游戏|本子|里番|资源|漫画|画师|作品|图|封面|缩略图|壁纸)/i.test(t)) continue;
     // ⚠️ 只有需要"歌名/关键词"的命令才过这个检查；
     //    不然别的规则（孙吧开关之类）捕获到什么都会被当成歌名判掉（2026-10-28 踩过）
-    if ((kind === 'sing' || kind === 'search') && bare && !looksLikeTitle(bare)) continue;
+    // model 不查这里：模型名是 feiyu/amiya 这种英文标识，looksLikeTitle 会当成句子
+    if (kind !== 'model' && (kind === 'sing' || kind === 'search') && bare && !looksLikeTitle(bare)) continue;
     // "唱完整版雨爱" / "整首雨爱" → 分段发
     const full = FULL_RE.test(arg) || FULL_RE.test(t);
     let seconds = null;
     if (kind === 'mute' || kind === 'silence') seconds = parseSeconds(arg) ?? parseSeconds(t);
-    return { kind, arg: arg.replace(FULL_RE, '').trim(), seconds, full, raw: t };
+    // 「唱首雨爱用 feiyu 的嗓子」有两个捕获组都可能是模型名，谁非空用谁
+    const model = kind === 'model' ? String(m[2] || m[1] || '').trim() : '';
+    return { kind, arg: arg.replace(FULL_RE, '').trim(), seconds, full, raw: t, ...(model ? { model } : {}) };
   }
   return null;
 }
@@ -130,6 +139,26 @@ export async function execute(cmd, ctx) {
   const { gid, policy, callApi } = ctx;
 
   switch (cmd.kind) {
+    // ── 音色（换声模型）──
+    // 「模型」/「有哪些嗓子」→ 列表；「换成 feiyu」/「切嗓子 amiya」→ 切。
+    // 列表向本地服务现问（/health 的 models 字段），所以往本地丢个新模型目录
+    // 立刻就能看见，不用改这里。
+    case 'model': {
+      const { listModels, setModel, currentModel } = await import('./voice.mjs');
+      const models = await listModels();
+      const cur = currentModel();
+      if (!models.length) return { handled: true, reply: '换声服务没开呢 ||| 等它起来再看' };
+      const arg = String(cmd.arg ?? '').trim();
+      if (!arg) {
+        const lines = models.map((m) => (m === cur ? `▶ ${m}（在用）` : `· ${m}`)).join(' ||| ');
+        return { handled: true, reply: `能唱的嗓子： ||| ${lines}` };
+      }
+      const r = await setModel(arg);
+      if (!r.ok) return { handled: true, reply: `换不了 ||| ${r.reason}` };
+      if (r.model === cur) return { handled: true, reply: `已经是 ${r.model} 了` };
+      return { handled: true, reply: `行，换成 ${r.model} 了 ||| 下一首就用这个嗓子` };
+    }
+
     // ── 风格档（2026-10-29 改成注册表）──
     // 一个 kind 管切/关/查/列：`#风格 孙吧`、`#风格 关`、`#风格`。
     // 加一档不用改代码 —— 往 persona/styles/ 丢一个 .md 就行。

@@ -70,7 +70,7 @@ function cachePath(bvid) { return `${VOICE_DIR}/${bvid}_${SEG_SEC}s.mp3`; }
  * 换声参数：模型名 / protect / index_rate 也从 settings.json 现读（同 singUrl 的理由）。
  * 2026-10-31 主人 A/B 后定：anjie2 + protect 0.55 + index 0.50 咬字最清楚。
  */
-function singOpts() {
+function singOpts(override = null) {
   // feiyu 是「肥鱼大小姐」RVC v2（manifest 定的 index 0.3 / protect 0.33 / rmvpe）。
   // 2026-11-07 接进来当默认：她自己的声音唱自己的歌。
   const o = { model: 'feiyu', protect: 0.33, index: 0.3 };
@@ -84,7 +84,22 @@ function singOpts() {
       if (Number.isFinite(Number(c.rvcIndexRate))) o.index = Number(c.rvcIndexRate);
     }
   } catch { /* 读不到就用默认 */ }
-  if (process.env.SING_MODEL) o.model = String(process.env.SING_MODEL);
+  // 「这首用 amiya 的嗓子」：只在这一次调用里换模型，不写设置——
+  // 主人点歌时顺手指定，不该把他全局的嗓子改掉。
+  if (override) {
+    const m = String(override).trim();
+    if (m) {
+      o.model = m;
+      try {
+        const base = process.env.DSH_HOME || '/root/.dsh';
+        const p2 = `${base}/voice/${m.replace(/[^A-Za-z0-9_-]/g, '')}/opts.json`;
+        const b = JSON.parse(readFileSync(p2, 'utf8'));
+        if (Number.isFinite(Number(b.protect))) o.protect = Number(b.protect);
+        if (Number.isFinite(Number(b.indexRate))) o.index = Number(b.indexRate);
+      } catch { /* 没定参就沿用全局的 */ }
+    }
+  }
+  if (process.env.SING_MODEL && !override) o.model = String(process.env.SING_MODEL);
   return o;
 }
 
@@ -231,7 +246,9 @@ const HER_CHUNK_SEC = Number(process.env.HER_CHUNK_SEC ?? 150);   // 单次送�
 // 是两条不同的音频。混在一起就会出现"点雨爱，唱出来是另一个嗓子"。
 // 目录名就是模型名，切模型等于换目录，互不干扰。
 function modelDir(model) {
-  const m = String(model || singOpts().model || 'default').trim() || 'default';
+  // 模型名要拼进路径，先洗一遍：只留字母数字和 _ -，防 ../ 写出缓存目录
+  const raw = String(model || singOpts().model || 'default').trim() || 'default';
+  const m = raw.replace(/[^A-Za-z0-9_-]/g, '') || 'default';
   const dir = `${VOICE_DIR}/${m}`;
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   return dir;
@@ -250,6 +267,60 @@ function herPartPath(bvid, i, model) {
 // 缓存文件名是 bvid，人看不懂；TG 那边要「随便来一首缓存里的歌」，
 // 就得有 bvid → 歌名 的对照。顺带记住时长，省一次 ffprobe。
 const SONG_INDEX = `${VOICE_DIR}/index.json`;
+
+// ── 音色（换声模型）切换 ──────────────────────────────
+//
+// 2026-11-07 主人要求：QQ 里发条命令就能看有哪些嗓子、直接切。
+// 模型名归 /sing 那头管（rvc_models/ 下的一级子目录），所以列表向服务现问，
+// 不在本地写死 —— 往本地丢个新模型目录，这里立刻能看到。
+//
+// 切换只改 settings.json（和设置页同一个文件），singOpts() 每条都现读，
+// 所以切完下一首就生效，不用重启桥。
+
+/** 现在用的是哪个嗓子（同 singOpts，只是给命令层一个语义清楚的名字） */
+export function currentModel() { return singOpts().model; }
+
+/** 服务那边有哪些模型；连不上返回 [] */
+export async function listModels() {
+  const url = singUrl();
+  if (!url) return [];
+  try {
+    const r = await fetch(url.replace(/\/+$/, '') + '/health', { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return [];
+    const j = await r.json();
+    return Array.isArray(j.models) ? j.models.map(String) : [];
+  } catch { return [] }
+}
+
+/**
+ * 切模型：写 settings.json 的 rvcModel。
+ * @returns {Promise<{ok:boolean, model?:string, reason?:string}>}
+ */
+export async function setModel(name) {
+  const want = String(name ?? '').trim();
+  if (!want) return { ok: false, reason: '没给模型名' };
+  const models = await listModels();
+  if (!models.length) return { ok: false, reason: '换声服务没开（拿不到模型列表）' };
+  const hit = models.find((m) => m.toLowerCase() === want.toLowerCase());
+  if (!hit) return { ok: false, reason: `没这个嗓子（有：${models.join(' / ')}）` };
+  const base = process.env.DSH_HOME || '/root/.dsh';
+  const f = `${base}/voice/settings.json`;
+  try {
+    const cfg = existsSync(f) ? (JSON.parse(readFileSync(f, 'utf8')) || {}) : {};
+    cfg.rvcModel = hit;
+    // 换模型顺手带上该模型自己的定参（存在 modelDir 旁边的 opts.json 里），
+    // 没有就不动 —— 宁可沿用旧的，也别把别的模型的参数硬套上去
+    try {
+      const o = JSON.parse(readFileSync(`${modelDir(hit)}/opts.json`, 'utf8'));
+      if (Number.isFinite(Number(o.protect))) cfg.rvcProtect = Number(o.protect);
+      if (Number.isFinite(Number(o.indexRate))) cfg.rvcIndexRate = Number(o.indexRate);
+    } catch { /* 没有定参文件 */ }
+    writeFileSync(f, JSON.stringify(cfg, null, 2));
+    return { ok: true, model: hit };
+  } catch (e) {
+    return { ok: false, reason: `写不进设置：${String(e?.message ?? e).slice(0, 60)}` };
+  }
+}
 
 export function readSongIndex() {
   try { return JSON.parse(readFileSync(SONG_INDEX, 'utf8')) || {} } catch { return {} }
@@ -363,8 +434,8 @@ async function concatAudio(list, out) {
  * 没有配本地 /sing 时也照常工作（等于原唱拼一条，行为跟以前一致）。
  * @returns {Promise<{path:string, her:boolean, total:number, cached:boolean}>}
  */
-export async function ensureHerFull(bvid) {
-  const model = singOpts().model;
+export async function ensureHerFull(bvid, modelOverride = null) {
+  const model = singOpts(modelOverride).model;
   const out = herFullPath(bvid, model);
   if (existsSync(out) && statSync(out).size > 100 * 1024) {
     console.log(`  [voice] 缓存命中（整首换声 · ${model}）${Math.round(statSync(out).size / 1024)}KB`);
@@ -396,8 +467,8 @@ export async function ensureHerFull(bvid) {
 }
 
 /** 从整首换声结果里切第 index 段（便宜，不碰 GPU） */
-export async function cutForSend(bvid, index, sec) {
-  const model = singOpts().model;
+export async function cutForSend(bvid, index, sec, modelOverride = null) {
+  const model = singOpts(modelOverride).model;
   const src = herFullPath(bvid, model);
   const dst = `${modelDir(model)}/${bvid}_send_${sec}s_${index}.mp3`;
   if (existsSync(dst) && statSync(dst).size > 2000) return dst;
@@ -607,7 +678,7 @@ export async function makeVoiceByRef(ref) {
   if (tot > 0 && tot < dur) dur = Math.max(10, tot - 1);
 
   let path;
-  try { path = await cutForSend(bvid, 0, dur); }
+  try { path = await cutForSend(bvid, 0, dur, modelOverride); }
   catch (e) { return { ok: false, reason: '切段失败: ' + e.message }; }
   if (statSync(path).size < 2000) return { ok: false, reason: '切出来的文件太小，可能没声音' };
 
@@ -624,7 +695,7 @@ function fmtSec(s) {
   return n ? `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}` : ''
 }
 
-export async function makeVoice(query, { pick: forced = null } = {}) {
+export async function makeVoice(query, { pick: forced = null, model: modelOverride = null } = {}) {
   gc();
   const { kw, version } = splitVersion(query);
   if (!kw) return { ok: false, reason: '没听清要什么' };
@@ -640,7 +711,7 @@ export async function makeVoice(query, { pick: forced = null } = {}) {
   // ① 整首换成她的嗓子（一次，永久复用；跟段长无关）
   let full;
   try {
-    full = await ensureHerFull(bvid);
+    full = await ensureHerFull(bvid, modelOverride);
   } catch (e) {
     return { ok: false, reason: '换声/下载失败: ' + e.message };
   }
@@ -650,7 +721,7 @@ export async function makeVoice(query, { pick: forced = null } = {}) {
   if (total > 0 && total < dur) dur = Math.max(10, total - 1);
 
   let path;
-  try { path = await cutForSend(bvid, 0, dur); }
+  try { path = await cutForSend(bvid, 0, dur, modelOverride); }
   catch (e) { return { ok: false, reason: '切段失败: ' + e.message }; }
 
   const size = statSync(path).size;
@@ -712,7 +783,7 @@ export async function makeVoiceFull(query, { maxSeg = FULL_MAX_SEG, onSegment = 
   // 整首换成她的嗓子（一次），再按段长切 —— 段长怎么改都不重跑 GPU
   let full;
   try {
-    full = await ensureHerFull(bvid);
+    full = await ensureHerFull(bvid, modelOverride);
   } catch (e) {
     return { ok: false, reason: '换声/下载失败: ' + e.message };
   }
