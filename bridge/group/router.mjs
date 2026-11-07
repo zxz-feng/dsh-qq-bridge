@@ -1056,11 +1056,12 @@ async function runSingleSong({ query, raw = '', quiet = false, pick = null }, { 
   const dry = policy.dryRun !== false;
   const quote = evt?.message_id ? `[CQ:reply,id=${evt.message_id}]` : '';
   const send = async (body) => {
-    if (dry) { console.log(`  [dry-run] 会发: ${body}`); return; }
+    if (dry) { console.log(`  [dry-run] 会发: ${body}`); return false; }
     const r = await callApi('send_group_msg', { group_id: Number(gid), message: body });
     const ok = sendOk(r);
     if (ok) store.pushSentId(gid, r?.data?.message_id);
     console.log(`  [group] ${ok ? '已发' : '发送失败'}: ${String(body).slice(0, 40)}`);
+    return ok;
   };
 
   const used = store.loadStats(gid).voice ?? 0;
@@ -1131,16 +1132,18 @@ async function runSingleSong({ query, raw = '', quiet = false, pick = null }, { 
 
   // 这首歌配的表情包（主人 2026-11-07 要求：点《朋友的酒》固定发那两张）
   // 紧跟着语音发，不引用 —— 引用+图片在某些客户端也会显示成空泡
+  // 私聊也会走到这里（gid 是 "p+QQ号"），callApi 已经把 send_group_msg 翻成 send_private_msg。
   const stks = commands.songStickersFor(policy, query);
+  console.log(`  [group] 配套表情包 ${stks.length} 张`);
   for (const f of stks) {
     const p2 = `${HOST_MEDIA}/stickers/small/${f}`;
     const p3 = existsSync(p2) ? p2 : `${HOST_MEDIA}/stickers/${f}`;
     if (!existsSync(p3)) { console.log(`  [group] 配套表情包不在：${f}`); continue; }
     if (dry) { console.log(`  [dry-run] 会发图: ${f}`); continue; }
-    const ri = await callApi('send_group_msg', { group_id: Number(gid), message: imageCQ(p3) });
-    const okI = sendOk(ri);
-    console.log(`  [group] 配套表情包${okI ? '已发' : '发送失败'}: ${f.slice(0, 12)}`);
-    if (okI) store.pushSentId(gid, ri?.data?.message_id);
+    // ⚠️ 不要直接 callApi('send_group_msg')：私聊的 gid 是 "p+QQ号"，
+    // 真正的翻译发生在私聊那层 callApi 包装里；这里统一走 send()，群聊私聊都对。
+    const okI = await send(imageCQ(p3));
+    console.log(`  [group] 配套表情包${okI ? '已发' : '没发出去'}: ${f.slice(0, 12)}`);
   }
   audit(gid, { gid, uin, song: query, ok: true, title: v.title, sec: v.sec, cached: v.cached });
   return true;

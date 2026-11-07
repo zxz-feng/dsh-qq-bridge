@@ -347,9 +347,15 @@ export function songStickersFor(policy, query) {
   if (!map || typeof map !== 'object') return [];
   const want = String(query ?? '').replace(/[《》""（）()\s]/g, '').toLowerCase();
   if (!want) return [];
-  for (const [k, v] of Object.entries(map)) {
-    const key = String(k).replace(/[《》""（）()\s]/g, '').toLowerCase();
-    if (key && (want === key || want.includes(key) || key.includes(want))) {
+  // 先找完全同名的（"朋友的酒" 不能吃掉 "朋友" 这种更宽的键），再退回包含匹配。
+  const norm = (x) => String(x).replace(/[《》""（）()\s]/g, '').toLowerCase();
+  const entries = Object.entries(map);
+  for (const [k, v] of entries) {
+    if (norm(k) === want) return Array.isArray(v) ? v.filter(Boolean) : [];
+  }
+  for (const [k, v] of entries) {
+    const key = norm(k);
+    if (key && (want.includes(key) || key.includes(want))) {
       return Array.isArray(v) ? v.filter(Boolean) : [];
     }
   }
