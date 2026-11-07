@@ -97,6 +97,47 @@ const waiters = new Map()
 
 // 断线期间错过的消息，连上后补回来（QQ 不会重发，只能自己去拉）
 const handledIds = new Set()
+
+/**
+ * 同一条消息只处理一次 —— 内存 Set + 磁盘 seen.json。
+ * 为什么要落盘：桥重启（我改代码、看门狗拉、插件 supervisor 重启）之后
+ * handledIds 是空的，而 catchUp 的 lastseen.json 只记到「秒」，
+ * 同一秒内的消息时间戳相等 → `t <= since` 判不出来 → 再回一遍。
+ * 2026-11-07 18:12 就是这样：17:46:57 那条「唱朋友的酒」被重放，
+ * 于是同一条指令点了两遍歌、发了两遍语音和两套表情包。
+ */
+let seenIds = null
+function loadSeenIds() {
+  if (seenIds) return seenIds
+  seenIds = new Set()
+  try {
+    const arr = JSON.parse(readFileSync(join(HOME, 'seen.json'), 'utf8'))
+    if (Array.isArray(arr)) for (const x of arr) seenIds.add(String(x))
+  } catch { /* 第一次跑，没有这文件 */ }
+  return seenIds
+}
+let seenDirty = false
+function markSeen(id) {
+  const s = loadSeenIds()
+  const k = String(id ?? '')
+  if (!k) return false
+  if (s.has(k)) return false
+  s.add(k)
+  seenDirty = true
+  return true
+}
+function flushSeen() {
+  if (!seenDirty) return
+  try {
+    // 只留最近 800 条，文件不会长胖
+    const arr = [...loadSeenIds()].slice(-800)
+    writeFileSync(join(HOME, 'seen.json'), JSON.stringify(arr))
+    seenDirty = false
+  } catch { /* 写失败下次再写 */ }
+}
+setInterval(flushSeen, 5000)
+process.on('exit', flushSeen)
+
 async function catchUpMissed() {
   try {
     const allow = loadAllowlist(HOME)
@@ -112,9 +153,17 @@ async function catchUpMissed() {
       friends,
       groups,
       selfUin: self,
-      isSeen: (id) => handledIds.has(id),
-      onPrivate: async (evt) => { handledIds.add(String(evt.message_id)); await handlePrivate(evt) },
-      onGroup: async (evt) => { handledIds.add(String(evt.message_id)); await handleGroupMessage(evt, { callApi }) },
+      isSeen: (id) => handledIds.has(String(id)) || loadSeenIds().has(String(id)),
+      onPrivate: async (evt) => {
+        handledIds.add(String(evt.message_id))
+        markSeen(evt.message_id)
+        await handlePrivate(evt)
+      },
+      onGroup: async (evt) => {
+        handledIds.add(String(evt.message_id))
+        markSeen(evt.message_id)
+        await handleGroupMessage(evt, { callApi })
+      },
       log,
     })
   } catch (e) { log(`[catchup] 出错: ${e?.message ?? e}`) }
@@ -141,8 +190,14 @@ function connect() {
       waiters.delete(evt.echo)
       return
     }
-    if (evt.post_type === 'message' && evt.message_type === 'private') { void handlePrivate(evt); return }
+    // 实时消息也走同一套去重：补拉处理过的那条，如果 QQ 又推了一遍，不再处理第二次
+    if (evt.post_type === 'message' && evt.message_type === 'private') {
+      if (!markSeen(evt.message_id)) return
+      void handlePrivate(evt)
+      return
+    }
     if (evt.post_type === 'message' && evt.message_type === 'group') {
+      if (!markSeen(evt.message_id)) return
       counters.groupIn += 1
       void handleGroupMessage(evt, { callApi })
     }
