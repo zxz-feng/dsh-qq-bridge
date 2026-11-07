@@ -280,6 +280,22 @@ const SONG_INDEX = `${VOICE_DIR}/index.json`;
 /** 现在用的是哪个嗓子（同 singOpts，只是给命令层一个语义清楚的名字） */
 export function currentModel() { return singOpts().model; }
 
+/** 默认嗓子：切过之后还留一手，一句话能回到它 */
+export const DEFAULT_MODEL = 'amiya';
+
+/**
+ * 模型的中文小名。列表只显示 feiyu / amiya2 这种标识，主人分不清哪个是哪个
+ * —— 2026-11-07「我之前用的阿米娅是哪一个？」
+ * 名字放这儿，别写进配置；本地 rvc_models/ 里没有的模型就不显示小名。
+ */
+export const MODEL_LABELS = {
+  amiya: '阿米娅 · 初版（唱得最稳，10-31 定的那版）',
+  amiya2: '阿米娅 · 重训（11-03 100 轮，素材多一份）',
+  anjie: '安洁莉娜 · 初版',
+  anjie2: '安洁莉娜 · 重训（10-31 A/B 定稿那版）',
+  feiyu: '肥鱼大小姐（她自己的声音）',
+};
+
 /** 服务那边有哪些模型；连不上返回 [] */
 export async function listModels() {
   const url = singUrl();

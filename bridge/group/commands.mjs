@@ -74,6 +74,9 @@ export function parseCommand(text) {
   const rules = [
     // 音色（换声模型）：查 / 切。列表向本地服务现问，不写死。
     // 2026-11-07 主人要求：「qq里面发送固定命令查看拥有模型并能够切换」
+    // 「回到默认」单独一条，必须排在通用切之前，否则被它当模型名吃掉
+    { kind: 'model', re: /^(?:换回|切成|回到|切到|用|恢复|要)?\s*(?:原来|最初|默认|默认的|原来那个)?\s*(?:那个)?\s*(?:的)?\s*(?:模型|嗓子|音色|声音)\s*(?:默认)?\s*$/ },
+    { kind: 'model', re: /^(?:换回|回到|切成|切到|恢复)\s*(?:原来|最初|默认的?)的?\s*(?:模型|嗓子|音色|声音)?\s*$/ },
     { kind: 'model', re: /^(?:看看|查一下|查查|列出|有哪些|所有)?\s*(?:换声|唱歌?的?)?\s*(?:模型|嗓子|音色|声音)\s*(?:有哪些|都有啥|列表|list|有什么)?\s*[?？]?$/ },
     { kind: 'model', re: /^(?:换成|切成|换|切|改成|设置|用)\s*(?:个)?\s*(?:模型|嗓子|音色|声音|用)?\s*([A-Za-z0-9_-]{2,20})\s*(?:吧|了|呀|啊)?\s*$/ },
     // 风格档（只有主人能调）。一个 kind 管全部：切/关/查/列。
@@ -123,7 +126,11 @@ export function parseCommand(text) {
     let seconds = null;
     if (kind === 'mute' || kind === 'silence') seconds = parseSeconds(arg) ?? parseSeconds(t);
     // 「唱首雨爱用 feiyu 的嗓子」有两个捕获组都可能是模型名，谁非空用谁
-    const model = kind === 'model' ? String(m[2] || m[1] || '').trim() : '';
+    // 「换回默认嗓子」这类没有模型名，给个哨兵值，让 execute 那边认出来
+    const isDefaultModel = kind === 'model' && /(默认|原来|最初|换回|回到|恢复)/.test(t) && !/[A-Za-z0-9_-]{2,}/.test(t);
+    const model = kind === 'model'
+      ? (isDefaultModel ? '默认' : String(m[2] || m[1] || '').trim())
+      : '';
     return { kind, arg: arg.replace(FULL_RE, '').trim(), seconds, full, raw: t, ...(model ? { model } : {}) };
   }
   return null;
@@ -144,13 +151,25 @@ export async function execute(cmd, ctx) {
     // 列表向本地服务现问（/health 的 models 字段），所以往本地丢个新模型目录
     // 立刻就能看见，不用改这里。
     case 'model': {
-      const { listModels, setModel, currentModel } = await import('./voice.mjs');
+      const { listModels, setModel, currentModel, DEFAULT_MODEL, MODEL_LABELS } = await import('./voice.mjs');
       const models = await listModels();
       const cur = currentModel();
       if (!models.length) return { handled: true, reply: '换声服务没开呢 ||| 等它起来再看' };
-      const arg = String(cmd.arg ?? '').trim();
+      const arg = String(cmd.model || cmd.arg || '').trim();
+      // 「模型 默认」/「换回默认嗓子」→ 回到 DEFAULT_MODEL
+      if (/^(默认|默认的|原来的|原来那个|回默认|恢复默认)$/.test(arg)) {
+        const r0 = await setModel(DEFAULT_MODEL);
+        if (!r0.ok) return { handled: true, reply: `换不了 ||| ${r0.reason}` };
+        if (r0.model === cur) return { handled: true, reply: `本来就是默认的 ${r0.model}` };
+        return { handled: true, reply: `好，回到 ${r0.model} 了 ||| ${MODEL_LABELS[r0.model] ?? ''}`.trim() };
+      }
       if (!arg) {
-        const lines = models.map((m) => (m === cur ? `▶ ${m}（在用）` : `· ${m}`)).join(' ||| ');
+        // 列出所有嗓子：带中文小名 + 谁在用 + 谁是默认
+        const lines = models.map((m) => {
+          const tag = m === cur ? '（在用）' : (m === DEFAULT_MODEL ? '（默认）' : '');
+          const name = MODEL_LABELS[m] ? ` ${MODEL_LABELS[m]}` : '';
+          return `${m === cur ? '▶' : '·'} ${m}${tag}${name}`;
+        }).join(' ||| ');
         return { handled: true, reply: `能唱的嗓子： ||| ${lines}` };
       }
       const r = await setModel(arg);
