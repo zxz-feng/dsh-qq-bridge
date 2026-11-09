@@ -19,12 +19,15 @@ import { biliSearch, biliInfo, runBili } from './search.mjs';
 import { pickSongVideo, judgeSong } from './songpick.mjs';
 import { STORE } from './store.mjs';
 import { HOST_MEDIA, toFileUrl } from './paths.mjs';
+import { pitchFor, semitoneTo, f0CacheInit, f0Cached, f0Store, TARGET_F0 } from './pitch.mjs';
 
 const exec = promisify(execFile);
 
 // ⚠️ 必须放在容器挂载区：NapCat 在容器里，看不到宿主机其他路径
 const VOICE_DIR = `${HOST_MEDIA}/voice`;
 if (!existsSync(VOICE_DIR)) mkdirSync(VOICE_DIR, { recursive: true });
+// 基频缓存：测过的歌不再重测（一次 1.4~2.5 秒，点歌时能省就省）
+f0CacheInit(`${VOICE_DIR}/f0.json`);
 
 // 这两个都是**外部依赖**（不是插件的一部分）：
 //   PY_ASR   装了 yt-dlp 的 python，用来扒 B站音频
@@ -85,6 +88,7 @@ function singOpts(override = null) {
       if (c.rvcModel) o.model = String(c.rvcModel).trim();
       if (Number.isFinite(Number(c.rvcProtect))) o.protect = Number(c.rvcProtect);
       if (Number.isFinite(Number(c.rvcIndexRate))) o.index = Number(c.rvcIndexRate);
+      o.force = !!c.rvcForce;
     }
   } catch { /* 读不到就用默认 */ }
   // 「这首用 amiya 的嗓子」：只在这一次调用里换模型，不写设置——
@@ -171,7 +175,7 @@ async function healRvc(url) {
   return false;
 }
 
-async function singRemoteTo(file, out) {
+async function singRemoteTo(file, out, pitch = null) {
   const url = singUrl();
   if (!url) return null;
   if (existsSync(out)) return out;
@@ -181,13 +185,20 @@ async function singRemoteTo(file, out) {
     const buf = readFileSync(file);
     const fd = new FormData();
     fd.append('file', new Blob([buf], { type: 'audio/mpeg' }), 'in.mp3');
-    // 默认 auto：让本地服务按源人声基频算半音（男声→女声模型要 +12 左右）
-    fd.append('pitch', process.env.SING_PITCH != null ? String(Number(process.env.SING_PITCH)) : 'auto');
+    // pitch 由**客户端**算好显式传（见 pitch.mjs）：
+    // 本地服务自己估 src_f0 不可靠 —— 实测把《恋爱循环》103.9Hz 报成 216.2Hz
+    // （差一个八度），四首里三首音高偏 2~8 个半音。所以不再用 'auto'。
+    // 只在测不出人声（f0=0）时才退回 auto，让服务尽力而为。
+    fd.append('pitch', pitch == null ? (process.env.SING_PITCH != null ? String(Number(process.env.SING_PITCH)) : 'auto') : String(pitch));
     // 模型与两个咬字参数（2026-10-31 主人定稿：anjie2 / protect 0.55 / index 0.50）
     const opt = singOpts();
     fd.append('model_name', opt.model);
     fd.append('protect', String(opt.protect));
     fd.append('index_rate', String(opt.index));
+    // 「咬字参数固定」开关（设置页 rvcForce）：打开才传 force=1。
+    // 为什么默认关：force=1 会让分段换声也用这套参数，不再按每段音频自动调；
+    // 安静/混响重的曲子可能因此咬字变糊 —— 2026-11-08 主人要求做成可切换，先别默认开。
+    if (opt.force) fd.append('force', '1');
     let r = null;
     let lastErr = null;
     // 本地服务可能在开机/唤醒后正在加载模型，第一次连不上很常见（2026-10-31 14:31 就是这样，
@@ -502,6 +513,28 @@ export async function ensureHerFull(bvid, modelOverride = null) {
   const total = await probeDuration(src);
   if (!total) throw new Error('读不出时长');
 
+  // 先测源人声基频，算出该升几个半音（2026-11-08 主人要求「做客户端」）。
+  // 测过就存下来，同一首歌重唱不再重测（一次约 1.4~2.5 秒）。
+  // 换声结果按 (bvid, model) 缓存，但 pitch 跟着「曲」走不跟模型走 ——
+  // 换个嗓子唱同一首歌，音高还是那个音高。
+  let pitch = null;
+  let f0info = f0Cached(bvid);
+  if (!f0info) {
+    try {
+      const r = await pitchFor(src, { url: singUrl() });
+      f0info = { f0: r.f0, pitch: r.pitch, frames: r.frames, by: r.by };
+      f0Store(bvid, f0info);
+      console.log(`  [voice] 测基频 ${r.f0.toFixed(1)}Hz（${r.by}）→ ${r.pitch > 0 ? '+' : ''}${r.pitch} 半音`
+        + `（${semitoneTo(r.f0, r.pitch).toFixed(0)}Hz / 目标 ${TARGET_F0}Hz，${r.frames} 帧）`);
+    } catch (e) {
+      console.log(`  [voice] 测基频失败，交给服务端估：${e.message}`);
+      f0info = null;
+    }
+  } else {
+    console.log(`  [voice] 基频命中缓存 ${f0info.f0.toFixed(1)}Hz → ${f0info.pitch > 0 ? '+' : ''}${f0info.pitch} 半音`);
+  }
+  if (f0info && f0info.f0 > 0) pitch = f0info.pitch;
+
   const n = Math.max(1, Math.ceil(total / HER_CHUNK_SEC));
   const parts = [];
   let converted = 0;
@@ -509,7 +542,7 @@ export async function ensureHerFull(bvid, modelOverride = null) {
     const seg = herPartPath(bvid, i, model);
     const dur = Math.min(HER_CHUNK_SEC, total - i * HER_CHUNK_SEC);
     if (!existsSync(seg) || statSync(seg).size < 2000) await cutSegment(src, seg, i * HER_CHUNK_SEC, dur);
-    const her = await singRemoteTo(seg, seg.replace(/\.mp3$/, '_her.mp3'));
+    const her = await singRemoteTo(seg, seg.replace(/\.mp3$/, '_her.mp3'), pitch);
     if (her) converted += 1;
     parts.push(her || seg);
     console.log(`  [voice] 整首换声 ${i + 1}/${n}${her ? '' : '（这段失败，保留原唱）'}`);
